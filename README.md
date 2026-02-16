@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ResolveIQ - AI-Based Support Ticket Prioritization Platform
 
 ## System Overview
@@ -144,3 +145,7 @@ resolveiq_frontend/
 
 ## License
 MIT License
+=======
+# ResolveIQ_backend without ai and api implementation 
+fastapi
+>>>>>>> 20a0d7bbc96ed8a8e008630a312601ea65791937
