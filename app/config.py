@@ -9,7 +9,7 @@ class Config:
     
     # Build database URI from environment variables
     DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
-    DB_PORT = os.environ.get("DB_PORT", "3307")
+    DB_PORT = os.environ.get("DB_PORT", "3306") # Default XAMPP MySQL port
     DB_USER = os.environ.get("DB_USER", "root")
     DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
     DB_NAME = os.environ.get("DB_NAME", "resolveiq")

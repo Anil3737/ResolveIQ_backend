@@ -1,4 +1,5 @@
 from app.models.user import User
+from app.models.role import Role
 from app.models.department import Department
 from app.models.ticket import Ticket
 from app.models.sla_rule import SLARule
