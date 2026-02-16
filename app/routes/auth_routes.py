@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from app.models import User, Role
 from app.extensions import db
-from flask_jwt_extended import create_access_token
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 import sqlalchemy as sa
 
 auth_bp = Blueprint('auth', __name__)
@@ -90,13 +90,11 @@ def login():
         if not data:
             return jsonify({"success": False, "message": "No data provided"}), 400
         
-        email = data.get('email')
+        email = data.get('email', '').replace(" ", "").lower().strip()
         password = data.get('password')
         
         if not email or not password:
-            error_msg = "Email and password are required"
-            print(f"❌ Validation Error: {error_msg}")
-            return jsonify({"success": False, "message": error_msg}), 400
+            return jsonify({"success": False, "message": "Email and password are required"}), 400
         
         # Find user
         print(f"🔍 Looking up user: {email}")
@@ -106,7 +104,10 @@ def login():
             print(f"✅ Password correct for: {email}")
             
             # Generate Token
-            access_token = create_access_token(identity={"id": user.id, "role_id": user.role_id})
+            access_token = create_access_token(identity={
+                "id": user.id, 
+                "role": user.role.name if user.role else "EMPLOYEE"
+            })
             
             # EXACT Login response structure
             response_data = {
@@ -126,3 +127,22 @@ def login():
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
+
+@auth_bp.route('/me', methods=['GET'])
+@jwt_required()
+def get_me():
+    try:
+        identity = get_jwt_identity()
+        user_id = identity.get('id')
+        user = User.query.get(user_id)
+        
+        if not user:
+            return jsonify({"success": False, "message": "User not found"}), 404
+            
+        return jsonify({
+            "success": True,
+            "data": user.to_dict()
+        }), 200
+    except Exception as e:
+        print(f"❌ ME ERROR: {str(e)}")
+        return jsonify({"success": False, "message": "Server error"}), 500
