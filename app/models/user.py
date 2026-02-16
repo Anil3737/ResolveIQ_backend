@@ -1,23 +1,32 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
-from sqlalchemy.sql import func
-from app.database import Base
+from app.extensions import db
+from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
+class User(db.Model):
+    __tablename__ = 'users'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.Enum('ADMIN', 'TEAM_LEAD', 'AGENT', 'EMPLOYEE'), nullable=False)
+    department_id = db.Column(db.Integer, db.ForeignKey('departments.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-class User(Base):
-    __tablename__ = "users"
+    department = db.relationship('Department', backref=db.backref('users', lazy=True))
 
-    id = Column(Integer, primary_key=True, index=True)
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
 
-    full_name = Column(String(120), nullable=False)
-    email = Column(String(150), nullable=False, unique=True, index=True)
-    phone = Column(String(20), nullable=True)
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
-    # Stage 1: keep it, but no auth logic yet
-    password_hash = Column(String(255), nullable=False)
-
-    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
-    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
-
-    is_active = Column(Boolean, default=True)
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "email": self.email,
+            "role": self.role,
+            "department_id": self.department_id,
+            "created_at": self.created_at.isoformat()
+        }

@@ -1,116 +1,77 @@
-# app/routes/auth_routes.py
+from flask import Blueprint, request, jsonify
+from app.services.auth_service import AuthService
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+auth_bp = Blueprint('auth', __name__)
 
-from app.database import get_db
-from app.models.user import User
-from app.models.role import Role
+@auth_bp.route('/register', methods=['POST'])
+def register():
+    try:
+        data = request.get_json()
+        print("=" * 50)
+        print("📝 REGISTER REQUEST RECEIVED")
+        print("Request JSON:", data)
+        print("=" * 50)
+        
+        # Validate required fields
+        if not data:
+            return jsonify({"success": False, "message": "No data provided"}), 400
+        
+        # Accept both 'name' and 'full_name', prefer 'full_name' if present
+        if 'full_name' in data:
+            data['name'] = data['full_name']
+        required_fields = ['name', 'email', 'password']
+        missing_fields = [field for field in required_fields if not data.get(field)]
+        if missing_fields:
+            error_msg = f"Missing required fields: {', '.join(missing_fields)}"
+            print(f"❌ Validation Error: {error_msg}")
+            return jsonify({"success": False, "message": error_msg}), 400
+        user, message = AuthService.register_user(data)
+        
+        if user:
+            print(f"✅ User registered successfully: {user.email}")
+            return jsonify({"success": True, "message": message, "data": user.to_dict()}), 201
+        else:
+            print(f"❌ Registration failed: {message}")
+            return jsonify({"success": False, "message": message}), 400
+            
+    except Exception as e:
+        print(f"❌ REGISTER ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
 
-from app.schemas.auth_schemas import (
-    RegisterRequest,
-    LoginRequest,
-    LoginResponse,
-    UserResponse,
-    ChangePasswordRequest,
-)
-
-from app.utils.password_utils import hash_password, verify_password
-from app.utils.jwt_utils import create_access_token
-from app.dependencies import get_current_user
-
-
-router = APIRouter(tags=["Auth"])
-
-
-# Note: Per requirements, user registration is handled by admins only via /admin/users
-# Employees cannot self-register.
-
-
-# -------------------------
-# 2) Login (All roles)
-# -------------------------
-@router.post("/auth/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
-
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is inactive",
-        )
-
-    if not verify_password(payload.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
-
-    # Load role name
-    role = db.query(Role).filter(Role.id == user.role_id).first()
-    role_name = role.name if role else "UNKNOWN"
-
-    # Create token
-    token = create_access_token(
-        data={"user_id": user.id, "role": role_name}
-    )
-
-    return LoginResponse(
-        access_token=token,
-        token_type="bearer",
-        user=UserResponse(
-            user_id=user.id,
-            full_name=user.full_name,
-            email=user.email,
-            phone=user.phone,
-            role=role_name,
-            is_active=user.is_active,
-        ),
-    )
-
-
-# -------------------------
-# 3) Get Current User
-# -------------------------
-@router.get("/auth/me", response_model=UserResponse)
-def me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    role = db.query(Role).filter(Role.id == current_user.role_id).first()
-    role_name = role.name if role else "UNKNOWN"
-
-    return UserResponse(
-        user_id=current_user.id,
-        full_name=current_user.full_name,
-        email=current_user.email,
-        phone=current_user.phone,
-        role=role_name,
-        is_active=current_user.is_active,
-    )
-
-
-# -------------------------
-# 4) Change Password
-# -------------------------
-@router.post("/auth/change-password")
-def change_password(
-    payload: ChangePasswordRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    # Verify old password
-    if not verify_password(payload.old_password, current_user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Old password is incorrect"
-        )
-
-    # Update new password
-    current_user.password_hash = hash_password(payload.new_password)
-    db.commit()
-
-    return {"message": "Password updated successfully"}
+@auth_bp.route('/login', methods=['POST'])
+def login():
+    try:
+        data = request.get_json()
+        print("=" * 50)
+        print("🔐 LOGIN REQUEST RECEIVED")
+        print("Request JSON:", data)
+        print("=" * 50)
+        
+        # Validate required fields
+        if not data:
+            return jsonify({"success": False, "message": "No data provided"}), 400
+        
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
+            error_msg = "Email and password are required"
+            print(f"❌ Validation Error: {error_msg}")
+            return jsonify({"success": False, "message": error_msg}), 400
+        
+        result, error = AuthService.login_user(email, password)
+        
+        if result:
+            print(f"✅ Login successful for: {email}")
+            return jsonify({"success": True, "message": "Login successful", "data": result}), 200
+        else:
+            print(f"❌ Login failed for {email}: {error}")
+            return jsonify({"success": False, "message": error}), 401
+            
+    except Exception as e:
+        print(f"❌ LOGIN ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500

@@ -1,7 +1,7 @@
 # app/database.py
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base, scoped_session
 
 from app.config import settings
 
@@ -17,13 +17,12 @@ SessionLocal = sessionmaker(
     bind=engine
 )
 
+# Use scoped_session for thread safety in Flask
+db_session = scoped_session(SessionLocal)
+
 Base = declarative_base()
 
 
-# Dependency for FastAPI routes
+# For use in models and routes
 def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    return db_session()

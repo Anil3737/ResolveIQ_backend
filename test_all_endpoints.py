@@ -7,7 +7,7 @@ import requests
 import json
 from datetime import datetime
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "http://127.0.0.1:5000"
 API_V1 = f"{BASE_URL}/api/v1"
 
 # Global variables for test data
@@ -71,7 +71,7 @@ def test_admin_login():
         if success:
             data = response.json()
             admin_token = data.get("access_token")
-            admin_user_id = data.get("user_id")
+            admin_user_id = data.get("user", {}).get("id")
             print_test(f"Admin login (user_id: {admin_user_id})", True)
         else:
             print_test("Admin login", False, response.text)

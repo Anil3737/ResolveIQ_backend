@@ -1,40 +1,45 @@
 # app/main.py
 
-from fastapi import FastAPI
-from app.database import Base, engine
-from app.models import Role, User  # ensures models load
-from app.routes.auth_routes import router as auth_router
-from app.routes.admin_routes import router as admin_router
-from app.routes import ticket_router
-# AI router disabled until dependencies are installed
-# from app.ai import ai_router
+# app/main.py
 
+from flask import Flask, jsonify
+from flask_cors import CORS
+from app.database import db_session
+from app.routes.auth_routes import auth_bp
+from app.routes.admin_routes import admin_bp
+from app.routes.ticket_routes import ticket_bp
+from app.ai.ai_routes import ai_bp
 
+def create_app():
+    app = Flask(__name__)
+    CORS(app)
 
-app = FastAPI(title="ResolveIQ API")
+    # Register Blueprints
+    app.register_blueprint(auth_bp, url_prefix="/api/v1")
+    app.register_blueprint(admin_bp, url_prefix="/api/v1")
+    app.register_blueprint(ticket_bp, url_prefix="/api/v1")
+    app.register_blueprint(ai_bp, url_prefix="/api/v1")
 
-# Create tables - NOTE: Tables should be created using create_tables.py or alembic migrations
-# Commenting out to avoid blocking server startup
-# Base.metadata.create_all(bind=engine)
+    @app.teardown_appcontext
+    def shutdown_session(exception=None):
+        db_session.remove()
 
-# Routers
-app.include_router(auth_router, prefix="/api/v1")
-app.include_router(admin_router, prefix="/api/v1")
-app.include_router(ticket_router)
-# AI router disabled until dependencies are installed (sentence-transformers, sklearn)
-# app.include_router(ai_router, prefix="/api/v1")
+    @app.route("/")
+    def root():
+        """Root endpoint - API information"""
+        return jsonify({
+            "message": "Welcome to ResolveIQ API (Flask)",
+            "version": "1.0",
+            "health_check": "/api/v1/health"
+        })
 
-@app.get("/")
-def root():
-    """Root endpoint - API information"""
-    return {
-        "message": "Welcome to ResolveIQ API",
-        "version": "1.0",
-        "docs": "http://127.0.0.1:8000/docs",
-        "health_check": "http://127.0.0.1:8000/api/v1/health"
-    }
+    @app.route("/api/v1/health")
+    def health():
+        return jsonify({"status": "ok", "service": "ResolveIQ API (Flask)"})
 
+    return app
 
-@app.get("/api/v1/health")
-def health():
-    return {"status": "ok", "service": "ResolveIQ API"}
+app = create_app()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

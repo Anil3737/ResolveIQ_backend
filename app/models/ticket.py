@@ -1,27 +1,42 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey
-from sqlalchemy.sql import func
-from app.database import Base
+from app.extensions import db
+from datetime import datetime
 
+class Ticket(db.Model):
+    __tablename__ = 'tickets'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    department_id = db.Column(db.Integer, db.ForeignKey('departments.id'), nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    assigned_to = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    status = db.Column(db.Enum('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'), default='OPEN')
+    priority = db.Column(db.Enum('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'), default='LOW')
+    ai_score = db.Column(db.Float, default=0.0)
+    breach_risk = db.Column(db.Float, default=0.0)
+    sla_hours = db.Column(db.Integer, nullable=False)
+    sla_deadline = db.Column(db.DateTime, nullable=False)
+    escalation_required = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    resolved_at = db.Column(db.DateTime, nullable=True)
 
-class Ticket(Base):
-    __tablename__ = "tickets"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    title = Column(String(200), nullable=False)
-    description = Column(Text, nullable=False)
-
-    department_id = Column(Integer, ForeignKey("departments.id"), nullable=False)
-
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True)
-
-    status = Column(Enum("OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED", "ESCALATED"), default="OPEN")
-    priority = Column(Enum("P1", "P2", "P3", "P4"), default="P4")
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    sla_hours = Column(Integer, default=24)
-    sla_deadline = Column(DateTime(timezone=True), nullable=True)
-    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "department_id": self.department_id,
+            "created_by": self.created_by,
+            "assigned_to": self.assigned_to,
+            "status": self.status,
+            "priority": self.priority,
+            "ai_score": self.ai_score,
+            "breach_risk": self.breach_risk,
+            "sla_hours": self.sla_hours,
+            "sla_deadline": self.sla_deadline.isoformat() if self.sla_deadline else None,
+            "escalation_required": self.escalation_required,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None
+        }
