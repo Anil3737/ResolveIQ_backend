@@ -1,5 +1,5 @@
 from functools import wraps
-from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+from flask_jwt_extended import verify_jwt_in_request, current_user
 from flask import jsonify
 
 def roles_required(*roles):
@@ -7,9 +7,14 @@ def roles_required(*roles):
         @wraps(fn)
         def wrapper(*args, **kwargs):
             verify_jwt_in_request()
-            identity = get_jwt_identity()
-            if identity.get('role') not in roles:
-                return jsonify({"success": False, "message": "Permission denied"}), 403
+            if not current_user:
+                return jsonify({"success": False, "message": "User not found"}), 404
+            
+            # Use the role object relationship we added to User model
+            user_role = current_user.role.name if current_user.role else "EMPLOYEE"
+            
+            if user_role not in roles:
+                return jsonify({"success": False, "message": f"Permission denied. Required: {roles}"}), 403
             return fn(*args, **kwargs)
         return wrapper
     return decorator

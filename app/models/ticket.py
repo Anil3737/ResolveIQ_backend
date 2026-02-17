@@ -10,13 +10,20 @@ class Ticket(db.Model):
     department_id = db.Column(db.Integer, db.ForeignKey('departments.id'), nullable=False)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     assigned_to = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    status = db.Column(db.Enum('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'), default='OPEN')
-    priority = db.Column(db.Enum('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'), default='LOW')
-    ai_score = db.Column(db.Float, default=0.0)
-    breach_risk = db.Column(db.Float, default=0.0)
-    sla_hours = db.Column(db.Integer, nullable=False)
-    sla_deadline = db.Column(db.DateTime, nullable=False)
-    escalation_required = db.Column(db.Boolean, default=False)
+
+    # Added 'ESCALATED' to match DB
+    status = db.Column(db.Enum('OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED', 'ESCALATED'), default='OPEN')
+    priority = db.Column(db.Enum('P1', 'P2', 'P3', 'P4'), default='P4')
+
+    # Defaults matching DB schema
+    ai_score = db.Column(db.Integer, nullable=False, default=0)
+    breach_risk = db.Column(db.Float, nullable=False, default=0.0)
+    escalation_required = db.Column(db.Boolean, nullable=False, default=False)
+
+    # Made nullable as per DB schema
+    sla_hours = db.Column(db.Integer, nullable=True)
+    sla_deadline = db.Column(db.DateTime, nullable=True)
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     resolved_at = db.Column(db.DateTime, nullable=True)
@@ -36,7 +43,7 @@ class Ticket(db.Model):
             "sla_hours": self.sla_hours,
             "sla_deadline": self.sla_deadline.isoformat() if self.sla_deadline else None,
             "escalation_required": self.escalation_required,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None
         }

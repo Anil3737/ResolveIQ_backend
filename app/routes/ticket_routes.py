@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity, current_user
 from app.services.ticket_service import TicketService
 from app.models.ticket import Ticket
 from app.utils.decorators import roles_required
@@ -11,20 +11,19 @@ ticket_bp = Blueprint('tickets', __name__)
 @roles_required('EMPLOYEE')
 def create_ticket():
     data = request.get_json()
-    user_id = get_jwt_identity().get('id')
+    user_id = current_user.id
     ticket = TicketService.create_ticket(data, user_id)
     return jsonify({"success": True, "data": ticket.to_dict()}), 201
 
 @ticket_bp.route('', methods=['GET'])
 @jwt_required()
 def get_tickets():
-    identity = get_jwt_identity()
-    role = identity.get('role')
-    user_id = identity.get('id')
+    user_id = current_user.id
+    user_role = current_user.role.name if current_user.role else "EMPLOYEE"
 
-    if role == 'EMPLOYEE':
+    if user_role == 'EMPLOYEE':
         tickets = Ticket.query.filter_by(created_by=user_id).all()
-    elif role == 'AGENT':
+    elif user_role == 'AGENT':
         tickets = Ticket.query.filter_by(assigned_to=user_id).all()
     else:
         tickets = Ticket.query.all()
@@ -42,7 +41,7 @@ def get_ticket(id):
 def assign_ticket(id):
     data = request.get_json()
     agent_id = data.get('agent_id')
-    user_id = get_jwt_identity().get('id')
+    user_id = int(get_jwt_identity())
     ticket = TicketService.assign_ticket(id, agent_id, user_id)
     return jsonify({"success": True, "data": ticket.to_dict()}), 200
 
@@ -51,7 +50,7 @@ def assign_ticket(id):
 def update_status(id):
     data = request.get_json()
     status = data.get('status')
-    user_id = get_jwt_identity().get('id')
+    user_id = int(get_jwt_identity())
     ticket = TicketService.update_status(id, status, user_id)
     return jsonify({"success": True, "data": ticket.to_dict()}), 200
 

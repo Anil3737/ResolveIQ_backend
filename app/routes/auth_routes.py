@@ -1,10 +1,23 @@
 from flask import Blueprint, request, jsonify
 from app.models import User, Role
 from app.extensions import db
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, current_user
 import sqlalchemy as sa
 
 auth_bp = Blueprint('auth', __name__)
+
+@auth_bp.route('/debug/jwt', methods=['GET'])
+def debug_jwt():
+    auth_header = request.headers.get('Authorization')
+    return jsonify({
+        "auth_header_present": auth_header is not None,
+        "auth_header_prefix": auth_header[:10] if auth_header else None,
+        "all_headers": dict(request.headers)
+    }), 200
+
+@auth_bp.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok", "message": "Auth system is up"}), 200
 
 @auth_bp.route('/register', methods=['POST'])
 def register():
@@ -104,10 +117,8 @@ def login():
             print(f"✅ Password correct for: {email}")
             
             # Generate Token
-            access_token = create_access_token(identity={
-                "id": user.id, 
-                "role": user.role.name if user.role else "EMPLOYEE"
-            })
+            # Using string ID for identity as required by JWT subject
+            access_token = create_access_token(identity=str(user.id))
             
             # EXACT Login response structure
             response_data = {
@@ -132,16 +143,12 @@ def login():
 @jwt_required()
 def get_me():
     try:
-        identity = get_jwt_identity()
-        user_id = identity.get('id')
-        user = User.query.get(user_id)
-        
-        if not user:
+        if not current_user:
             return jsonify({"success": False, "message": "User not found"}), 404
             
         return jsonify({
             "success": True,
-            "data": user.to_dict()
+            "data": current_user.to_dict()
         }), 200
     except Exception as e:
         print(f"❌ ME ERROR: {str(e)}")

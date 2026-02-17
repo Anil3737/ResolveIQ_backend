@@ -1,27 +1,26 @@
 # app/ai/ai_routes.py
 
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify
 from datetime import datetime
-from app.database import get_db
-from app.dependencies import token_required, get_current_user
+from flask_jwt_extended import jwt_required, current_user
 from app.models.ticket import Ticket
 from app.models.ticket_ai import TicketAI
 from app.ai.ai_engine import run_ticket_ai
+from app.extensions import db
 
 ai_bp = Blueprint("ai", __name__)
 
 @ai_bp.route("/ai/analyze/<int:ticket_id>", methods=["POST"])
-@token_required
+@jwt_required()
 def analyze_ticket(ticket_id):
     """Run AI analysis on a ticket and auto-update priority"""
-    db = get_db()
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    ticket = Ticket.query.filter_by(id=ticket_id).first()
     if not ticket:
         return jsonify({"detail": "Ticket not found"}), 404
 
     # Load historical resolved tickets
     past_tickets = (
-        db.query(Ticket)
+        Ticket.query
         .filter(Ticket.resolved_at != None)
         .order_by(Ticket.resolved_at.desc())
         .limit(200)
@@ -44,7 +43,7 @@ def analyze_ticket(ticket_id):
     except Exception as e:
         return jsonify({"detail": f"AI analysis failed: {str(e)}"}), 500
 
-    existing = db.query(TicketAI).filter(TicketAI.ticket_id == ticket.id).first()
+    existing = TicketAI.query.filter_by(ticket_id=ticket.id).first()
 
     if existing:
         existing.predicted_category = ai_result["predicted_category"]
@@ -65,10 +64,10 @@ def analyze_ticket(ticket_id):
             explanation_json=ai_result["explanation_json"],
             analyzed_at=datetime.utcnow()
         )
-        db.add(ai_row)
+        db.session.add(ai_row)
 
     ticket.priority = ai_result["priority"]
-    db.commit()
+    db.session.commit()
 
     return jsonify({
         "ticket_id": ticket.id,
@@ -77,15 +76,14 @@ def analyze_ticket(ticket_id):
     })
 
 @ai_bp.route("/ai/analysis/<int:ticket_id>", methods=["GET"])
-@token_required
+@jwt_required()
 def get_ai_analysis(ticket_id):
     """Get existing AI analysis for a ticket without re-running"""
-    db = get_db()
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    ticket = Ticket.query.filter_by(id=ticket_id).first()
     if not ticket:
         return jsonify({"detail": "Ticket not found"}), 404
     
-    ai_analysis = db.query(TicketAI).filter(TicketAI.ticket_id == ticket_id).first()
+    ai_analysis = TicketAI.query.filter_by(ticket_id=ticket_id).first()
     if not ai_analysis:
         return jsonify({"detail": "AI analysis not found. Run /ai/analyze/{ticket_id} first."}), 404
     
@@ -99,4 +97,3 @@ def get_ai_analysis(ticket_id):
         "explanation": ai_analysis.explanation_json,
         "analyzed_at": ai_analysis.analyzed_at.isoformat() if ai_analysis.analyzed_at else None
     })
-

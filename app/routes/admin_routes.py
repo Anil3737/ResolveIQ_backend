@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, current_user
 from app.utils.decorators import roles_required
 from app.models.user import User
 from app.models.audit_log import AuditLog
@@ -34,8 +34,8 @@ def get_audit_logs():
 @jwt_required()
 def handle_departments():
     if request.method == 'POST':
-        verify_jwt_in_request()
-        if get_jwt_identity().get('role') != 'ADMIN':
+        user_role = current_user.role.name if current_user.role else "EMPLOYEE"
+        if user_role != 'ADMIN':
             return jsonify({"success": False, "message": "Admin only"}), 403
         data = request.get_json()
         dept = Department(name=data.get('name'))
