@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from dotenv import load_dotenv
+from urllib.parse import quote_plus
 
 load_dotenv()
 
@@ -14,7 +15,8 @@ class Config:
     DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
     DB_NAME = os.environ.get("DB_NAME", "resolveiq")
     
-    SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    # URL encode password for SQLAlchemy to handle special characters like '@'
+    SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{DB_USER}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET", "jwt_secret_key")

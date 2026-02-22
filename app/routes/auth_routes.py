@@ -23,68 +23,23 @@ def health():
 def register():
     try:
         data = request.get_json()
-        print("=" * 50)
-        print("📝 REGISTER REQUEST RECEIVED")
-        print("Request JSON:", data)
-        print("=" * 50)
-        
         if not data:
             return jsonify({"success": False, "message": "No data provided"}), 400
         
-        # 1. Sanitize and Validate Data
-        required_fields = ['full_name', 'email', 'password']
-        missing_fields = [field for field in required_fields if not data.get(field)]
-        if missing_fields:
-            return jsonify({"success": False, "message": f"Missing fields: {', '.join(missing_fields)}"}), 400
-            
-        full_name = data.get('full_name').strip()
-        # FIX: Remove spaces from email (e.g., "anil@resolveiq. com" -> "anil@resolveiq.com")
-        email = data.get('email').replace(" ", "").lower().strip()
-        password = data.get('password')
-        phone = data.get('phone')
-        department_id = data.get('department_id')
-
-        # 2. Prevent Multiple Registrations
-        if User.query.filter_by(email=email).first():
-            return jsonify({"success": False, "message": "Email already registered"}), 409
-
-        # 3. DYNAMIC ROLE LOOKUP (No Hardcoding)
-        employee_role = Role.query.filter_by(name="EMPLOYEE").first()
-        if not employee_role:
-            # Fallback/Error if database isn't seeded properly
-            print("❌ SEVERE: 'EMPLOYEE' role missing from database!")
-            return jsonify({
-                "success": False, 
-                "message": "System configuration error: Employee role not initialized. Please contact admin."
-            }), 500
-
-        # 4. Create User
-        new_user = User(
-            full_name=full_name,
-            email=email,
-            phone=phone,
-            role_id=employee_role.id,
-            department_id=department_id,
-            is_active=True
-        )
-        new_user.set_password(password)
-
-        # 5. Commit to Database
-        db.session.add(new_user)
-        try:
-            db.session.commit()
+        # Default to employee for public registration
+        data['role'] = 'EMPLOYEE'
+        
+        from app.services.auth_service import AuthService
+        user, message = AuthService.register_user(data)
+        
+        if user:
             return jsonify({
                 "success": True, 
-                "message": "Registration successful", 
-                "data": new_user.to_dict()
+                "message": message, 
+                "data": user.to_dict()
             }), 201
-        except sa.exc.IntegrityError as e:
-            db.session.rollback()
-            print(f"❌ Integrity Error: {str(e)}")
-            return jsonify({
-                "success": False, 
-                "message": "Database constraint error. Check department ID or contact support."
-            }), 400
+        else:
+            return jsonify({"success": False, "message": message}), 400
             
     except Exception as e:
         print(f"❌ SERVER ERROR: {str(e)}")
@@ -94,50 +49,27 @@ def register():
 def login():
     try:
         data = request.get_json()
-        print("=" * 50)
-        print("🔐 LOGIN REQUEST RECEIVED")
-        print("Request JSON:", data)
-        print("=" * 50)
-        
-        # Validate required fields
         if not data:
             return jsonify({"success": False, "message": "No data provided"}), 400
         
-        email = data.get('email', '').replace(" ", "").lower().strip()
+        email = data.get('email', '').strip()
         password = data.get('password')
         
-        if not email or not password:
-            return jsonify({"success": False, "message": "Email and password are required"}), 400
+        from app.services.auth_service import AuthService
+        result, error = AuthService.login_user(email, password)
         
-        # Find user
-        print(f"🔍 Looking up user: {email}")
-        user = User.query.filter_by(email=email).first()
-        
-        if user and user.check_password(password):
-            print(f"✅ Password correct for: {email}")
-            
-            # Generate Token
-            # Using string ID for identity as required by JWT subject
-            access_token = create_access_token(identity=str(user.id))
-            
-            # EXACT Login response structure
-            response_data = {
+        if result:
+            return jsonify({
                 "success": True,
-                "data": {
-                    "access_token": access_token,
-                    "user": user.to_dict()
-                }
-            }
-            return jsonify(response_data), 200
+                "message": "Login successful",
+                "data": result
+            }), 200
         else:
-            print(f"❌ Invalid credentials for: {email}")
-            return jsonify({"success": False, "message": "Invalid email or password"}), 401
+            return jsonify({"success": False, "message": error}), 401
             
     except Exception as e:
         print(f"❌ LOGIN ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
+        return jsonify({"success": False, "message": "Server error"}), 500
 
 @auth_bp.route('/me', methods=['GET'])
 @jwt_required()
