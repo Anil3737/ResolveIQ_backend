@@ -2,10 +2,11 @@ from flask_jwt_extended import create_access_token
 from app.models.user import User, TeamLeadProfile, AgentProfile, EmployeeProfile
 from app.models.role import Role
 from app.extensions import db
+from app.utils.logging_utils import log_activity
 
 class AuthService:
     @staticmethod
-    def register_user(data):
+    def register_user(data, creator_id=None):
         """
         Unified registration logic that handles User profile creation.
         Uses transactions to ensure both User and Profile are created successfully.
@@ -92,6 +93,15 @@ class AuthService:
                 db.session.add(profile)
                 print(f"✅ EmployeeProfile staged for user {user.id}")
             
+            # 4.5 Log Activity
+            log_activity(
+                user_id=creator_id or user.id,
+                action_type="USER_CREATED",
+                entity_type="USER",
+                entity_id=user.id,
+                description=f"{role_name} account created for {user.full_name}"
+            )
+
             # 5. Commit Transaction
             db.session.commit()
             print(f"🎉 Successfully committed User and Profile for {email}")
@@ -111,8 +121,19 @@ class AuthService:
             if not user or not user.check_password(password):
                 return None, "Invalid email or password"
             
-            # Return identity as string ID for JWT
+            # Log the login activity
+            log_activity(
+                user_id=user.id,
+                action_type="USER_LOGIN",
+                entity_type="USER",
+                entity_id=user.id,
+                description=f"User {user.full_name} logged in"
+            )
+            db.session.commit()
+
+            # Generate JWT Token
             access_token = create_access_token(identity=str(user.id))
+
             return {
                 "access_token": access_token,
                 "user": user.to_dict()

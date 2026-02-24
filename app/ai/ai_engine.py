@@ -3,8 +3,16 @@ import re
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Load model once (fast + reliable)
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+# Global variable to hold the model instance
+_embedder_instance = None
+
+def get_embedder():
+    """Lazy loader for the SentenceTransformer model."""
+    global _embedder_instance
+    if _embedder_instance is None:
+        print("📥 Loading BERT model: all-MiniLM-L6-v2...")
+        _embedder_instance = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedder_instance
 
 # -------------------------
 # Demo Categories + Keywords
@@ -142,14 +150,14 @@ def run_ticket_ai(title: str, description: str, historical_tickets: list):
     severity_score, severity_reasons = score_from_keywords(text, SEVERITY_KEYWORDS)
 
     # Ticket embedding
-    ticket_embedding = embedder.encode(text)
+    ticket_embedding = get_embedder().encode(text)
 
     # Historical embeddings
     historical_embeddings = []
     historical_labels = []
 
     for t in historical_tickets:
-        historical_embeddings.append(embedder.encode(clean_text(t["text"])))
+        historical_embeddings.append(get_embedder().encode(clean_text(t["text"])))
         historical_labels.append(int(t["sla_breached"]))
 
     similarity_risk, sim_reasons = compute_similarity_risk(

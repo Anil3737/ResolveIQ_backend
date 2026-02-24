@@ -22,11 +22,23 @@ def get_tickets():
     user_role = current_user.role.name if current_user.role else "EMPLOYEE"
 
     if user_role == 'EMPLOYEE':
-        tickets = Ticket.query.filter_by(created_by=user_id).all()
+        # Employees see only their created tickets
+        tickets = Ticket.query.filter_by(created_by=user_id).order_by(Ticket.created_at.desc()).all()
+    elif user_role == 'TEAM_LEAD':
+        # Team Leads see tickets assigned to them OR tickets in their department
+        dept_id = current_user.team_lead_profile.department_id if current_user.team_lead_profile else None
+        tickets = Ticket.query.filter(
+            (Ticket.assigned_to == user_id) | (Ticket.department_id == dept_id)
+        ).order_by(Ticket.created_at.desc()).all()
     elif user_role == 'AGENT':
-        tickets = Ticket.query.filter_by(assigned_to=user_id).all()
+        # Agents see only tickets assigned to them
+        tickets = Ticket.query.filter_by(assigned_to=user_id).order_by(Ticket.created_at.desc()).all()
+    elif user_role == 'ADMIN':
+        # Admins see all tickets
+        tickets = Ticket.query.order_by(Ticket.created_at.desc()).all()
     else:
-        tickets = Ticket.query.all()
+        # Fallback
+        tickets = Ticket.query.filter_by(created_by=user_id).all()
 
     return jsonify({"success": True, "data": [t.to_dict() for t in tickets]}), 200
 
@@ -45,14 +57,26 @@ def assign_ticket(id):
     ticket = TicketService.assign_ticket(id, agent_id, user_id)
     return jsonify({"success": True, "data": ticket.to_dict()}), 200
 
-@ticket_bp.route('/<int:id>/status', methods=['PATCH'])
-@roles_required('AGENT', 'TEAM_LEAD')
-def update_status(id):
+@ticket_bp.route('/update-status', methods=['POST'])
+@jwt_required()
+def update_ticket_status():
     data = request.get_json()
-    status = data.get('status')
-    user_id = int(get_jwt_identity())
-    ticket = TicketService.update_status(id, status, user_id)
-    return jsonify({"success": True, "data": ticket.to_dict()}), 200
+    ticket_id = data.get('ticket_id')
+    new_status = data.get('new_status')
+    
+    if not all([ticket_id, new_status]):
+        return jsonify({"success": False, "message": "Missing ticket_id or new_status"}), 400
+        
+    try:
+        ticket = TicketService.update_ticket_status(ticket_id, new_status, current_user)
+        return jsonify({
+            "success": True, 
+            "data": ticket.to_dict()
+        }), 200
+    except (ValueError, PermissionError) as e:
+        return jsonify({"success": False, "message": str(e)}), 403
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @ticket_bp.route('/<int:id>', methods=['DELETE'])
 @roles_required('ADMIN')

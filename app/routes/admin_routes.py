@@ -4,12 +4,15 @@ from app.utils.decorators import roles_required
 from app.models.user import User
 from app.models.role import Role
 from app.models.audit_log import AuditLog
+from app.models.system_activity_log import SystemActivityLog
 from app.models.department import Department
 from app.services.auth_service import AuthService
+from app.models.team import Team
 from app.extensions import db
 import re
 import random
 import string
+from datetime import datetime
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -17,7 +20,7 @@ admin_bp = Blueprint('admin', __name__)
 @roles_required('ADMIN')
 def create_user():
     data = request.get_json()
-    user, message = AuthService.register_user(data)
+    user, message = AuthService.register_user(data, creator_id=current_user.id)
     if user:
         return jsonify({"success": True, "message": message, "data": user.to_dict()}), 201
     return jsonify({"success": False, "message": message}), 400
@@ -61,6 +64,59 @@ def get_teams():
         return jsonify({"success": True, "data": teams}), 200
     except Exception as e:
         print(f"Error fetching teams: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@admin_bp.route('/teams', methods=['POST'])
+@roles_required('ADMIN')
+def create_team():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "No data provided"}), 400
+
+        name = data.get('name', '').strip()
+        description = data.get('description', '').strip()
+        department_id = data.get('department_id')
+        team_lead_id = data.get('team_lead_id')
+
+        if not name:
+            return jsonify({"success": False, "message": "Team name is required"}), 400
+
+        # Check if team name already exists
+        if Team.query.filter_by(name=name).first():
+            return jsonify({"success": False, "message": f"Team '{name}' already exists"}), 400
+
+        new_team = Team(
+            name=name,
+            description=description,
+            department_id=department_id,
+            team_lead_id=team_lead_id
+        )
+
+        db.session.add(new_team)
+        db.session.flush() # Get the ID for auditing
+
+        try:
+            from app.services.audit_service import AuditService
+            AuditService.log_action(f"ADMIN_CREATE_TEAM: Created team {name}", current_user.id, new_team.id)
+        except Exception as e:
+            print(f"⚠️ AUDIT ERROR: {e}")
+
+        db.session.commit()
+        
+        return jsonify({
+            "success": True, 
+            "message": "Team created successfully",
+            "data": {
+                "id": new_team.id,
+                "name": new_team.name,
+                "description": new_team.description
+            }
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ ERROR in create_team: {str(e)}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/audit-logs', methods=['GET'])
@@ -179,7 +235,7 @@ def create_staff():
             "location": location
         }
 
-        user, message = AuthService.register_user(staff_data)
+        user, message = AuthService.register_user(staff_data, creator_id=current_user.id)
 
         if user:
             # --- SUCCESS RESPONSE ---
@@ -277,7 +333,7 @@ def create_agent():
             "location": location
         }
 
-        user, message = AuthService.register_user(agent_data)
+        user, message = AuthService.register_user(agent_data, creator_id=current_user.id)
 
         if user:
             # --- SUCCESS RESPONSE ---
@@ -300,7 +356,144 @@ def create_agent():
         print(f"❌ ERROR in create_agent: {str(e)}")
         return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
 
-    except Exception as e:
-        db.session.rollback()
+        db.session.commit()
         print(f"❌ ERROR in create_agent: {str(e)}")
         return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
+
+@admin_bp.route('/tickets', methods=['GET'])
+@roles_required('ADMIN')
+def get_all_tickets():
+    """Fetch all tickets for admin view."""
+    try:
+        from app.models.ticket import Ticket
+        tickets = Ticket.query.order_by(Ticket.created_at.desc()).all()
+        return jsonify({
+            "success": True, 
+            "data": [t.to_dict() for t in tickets]
+        }), 200
+    except Exception as e:
+        print(f"❌ ERROR fetching tickets: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@admin_bp.route('/system-activity', methods=['GET'])
+@roles_required('ADMIN')
+def get_system_activity():
+    """
+    Fetch paginated and filterable system activity logs.
+    """
+    try:
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 20, type=int)
+        action_type = request.args.get('action_type')
+        user_id = request.args.get('user_id', type=int)
+        entity_type = request.args.get('entity_type')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+
+        query = SystemActivityLog.query.order_by(SystemActivityLog.created_at.desc())
+
+        if action_type:
+            query = query.filter(SystemActivityLog.action_type == action_type)
+        if user_id:
+            query = query.filter(SystemActivityLog.user_id == user_id)
+        if entity_type:
+            query = query.filter(SystemActivityLog.entity_type == entity_type)
+        
+        if date_from:
+            try:
+                df = datetime.fromisoformat(date_from)
+                query = query.filter(SystemActivityLog.created_at >= df)
+            except ValueError:
+                pass
+        
+        if date_to:
+            try:
+                dt = datetime.fromisoformat(date_to)
+                query = query.filter(SystemActivityLog.created_at <= dt)
+            except ValueError:
+                pass
+
+        pagination = query.paginate(page=page, per_page=limit, error_out=False)
+        logs = pagination.items
+
+        return jsonify({
+            "success": True,
+            "total": pagination.total,
+            "page": page,
+            "pages": pagination.pages,
+            "limit": limit,
+            "logs": [log.to_dict() for log in logs]
+        }), 200
+    except Exception as e:
+        print(f"❌ ERROR fetching activity logs: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@admin_bp.route('/dashboard', methods=['GET'])
+@roles_required('ADMIN')
+def get_dashboard_metrics():
+    """
+    Fetch comprehensive dashboard metrics, risk distribution, and top risky tickets.
+    """
+    try:
+        from app.models.ticket import Ticket
+        
+        # 1. Total Tickets
+        total_tickets = Ticket.query.count()
+        
+        # 2. High Risk Count (ai_score >= 70 AND status != CLOSED)
+        high_risk_count = Ticket.query.filter(
+            Ticket.ai_score >= 70,
+            Ticket.status != "CLOSED"
+        ).count()
+        
+        # 3. SLA Breached Count (deadline passed AND not RESOLVED/CLOSED)
+        sla_breached_count = Ticket.query.filter(
+            Ticket.sla_deadline < datetime.utcnow(),
+            Ticket.status.notin_(["RESOLVED", "CLOSED"])
+        ).count()
+        
+        # 4. Escalated Count
+        escalated_count = Ticket.query.filter_by(
+            escalation_required=True
+        ).count()
+        
+        # 5. Risk Distribution (Categorize by ai_score)
+        critical = Ticket.query.filter(Ticket.ai_score >= 85).count()
+        high = Ticket.query.filter(Ticket.ai_score.between(70, 84)).count()
+        medium = Ticket.query.filter(Ticket.ai_score.between(40, 69)).count()
+        low = Ticket.query.filter(Ticket.ai_score < 40).count()
+        
+        # 6. Top 5 Risky Tickets
+        top_risky = Ticket.query.filter(
+            Ticket.status != "CLOSED"
+        ).order_by(
+            Ticket.ai_score.desc()
+        ).limit(5).all()
+        
+        return jsonify({
+            "success": True,
+            "metrics": {
+                "total_tickets": total_tickets,
+                "high_risk": high_risk_count,
+                "sla_breached": sla_breached_count,
+                "escalated": escalated_count
+            },
+            "risk_distribution": {
+                "critical": critical,
+                "high": high,
+                "medium": medium,
+                "low": low
+            },
+            "top_risky_tickets": [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "status": t.status,
+                    "ai_score": t.ai_score
+                } for t in top_risky
+            ]
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ ERROR fetching dashboard metrics: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500

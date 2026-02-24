@@ -18,6 +18,7 @@ def create_app(config_class=Config):
     from app.routes.sla_routes import sla_bp
     from app.routes.ai_routes import ai_bp
     from app.routes.analytics_routes import analytics_bp
+    from app.routes.team_lead_routes import team_lead_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
@@ -25,6 +26,11 @@ def create_app(config_class=Config):
     app.register_blueprint(sla_bp, url_prefix='/api/sla')
     app.register_blueprint(ai_bp, url_prefix='/api/ai')
     app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
+    app.register_blueprint(team_lead_bp, url_prefix='/api/teamlead')
+    
+    # Initialize background scheduler
+    from app.scheduler import init_scheduler
+    init_scheduler(app)
 
     # JWT Identity/Lookup Loaders
     from app.models import User
@@ -58,5 +64,10 @@ def create_app(config_class=Config):
     def expired_token_callback(jwt_header, jwt_data):
         print(f"❌ JWT EXPIRED: {jwt_data}")
         return jsonify({"success": False, "message": "Token has expired"}), 401
+
+    # Create tables if they don't exist
+    with app.app_context():
+        db.create_all()
+        print("✅ Database tables verified/created.")
 
     return app

@@ -5,3 +5,4 @@ from app.models.ticket import Ticket
 from app.models.ticket_ai import TicketAI
 from app.models.sla_rule import SLARule
 from app.models.audit_log import AuditLog
+from app.models.system_activity_log import SystemActivityLog
