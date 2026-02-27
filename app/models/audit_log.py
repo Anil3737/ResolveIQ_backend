@@ -1,5 +1,10 @@
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
+
+def format_datetime(dt):
+    if dt:
+        return dt.replace(tzinfo=timezone.utc).isoformat()
+    return None
 
 class AuditLog(db.Model):
     __tablename__ = 'audit_logs'
@@ -16,5 +21,5 @@ class AuditLog(db.Model):
             "action": self.action,
             "performed_by": self.performed_by,
             "ticket_id": self.ticket_id,
-            "timestamp": self.timestamp.isoformat()
+            "timestamp": format_datetime(self.timestamp)
         }

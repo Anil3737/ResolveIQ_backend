@@ -14,11 +14,16 @@ def create_app():
     app = Flask(__name__)
     CORS(app)
 
-    # Register Blueprints
-    app.register_blueprint(auth_bp, url_prefix="/api/v1")
-    app.register_blueprint(admin_bp, url_prefix="/api/v1")
-    app.register_blueprint(ticket_bp, url_prefix="/api/v1")
-    app.register_blueprint(ai_bp, url_prefix="/api/v1")
+    # Register Blueprints - Updated to match frontend expectations
+    app.register_blueprint(auth_bp, url_prefix="/api/auth")
+    app.register_blueprint(admin_bp, url_prefix="/api/admin")
+    app.register_blueprint(ticket_bp, url_prefix="/api/tickets")
+    app.register_blueprint(ai_bp, url_prefix="/api/ai")
+    
+    from app.routes.team_lead_routes import team_lead_bp
+    from app.routes.agent_routes import agent_bp
+    app.register_blueprint(team_lead_bp, url_prefix="/api/team-lead")
+    app.register_blueprint(agent_bp, url_prefix="/api/agent")
 
     @app.teardown_appcontext
     def shutdown_session(exception=None):

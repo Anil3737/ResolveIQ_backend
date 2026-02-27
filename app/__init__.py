@@ -19,6 +19,7 @@ def create_app(config_class=Config):
     from app.routes.ai_routes import ai_bp
     from app.routes.analytics_routes import analytics_bp
     from app.routes.team_lead_routes import team_lead_bp
+    from app.routes.agent_routes import agent_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
@@ -26,7 +27,8 @@ def create_app(config_class=Config):
     app.register_blueprint(sla_bp, url_prefix='/api/sla')
     app.register_blueprint(ai_bp, url_prefix='/api/ai')
     app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
-    app.register_blueprint(team_lead_bp, url_prefix='/api/teamlead')
+    app.register_blueprint(team_lead_bp, url_prefix='/api/team-lead')
+    app.register_blueprint(agent_bp, url_prefix='/api/agent')
     
     # Initialize background scheduler
     from app.scheduler import init_scheduler
@@ -68,6 +70,6 @@ def create_app(config_class=Config):
     # Create tables if they don't exist
     with app.app_context():
         db.create_all()
-        print("✅ Database tables verified/created.")
+        print("Database tables verified/created.")
 
     return app

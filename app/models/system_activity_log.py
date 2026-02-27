@@ -1,5 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from app.extensions import db
+
+def format_datetime(dt):
+    if dt:
+        return dt.replace(tzinfo=timezone.utc).isoformat()
+    return None
 
 class SystemActivityLog(db.Model):
     __tablename__ = 'system_activity_logs'
@@ -24,7 +29,7 @@ class SystemActivityLog(db.Model):
             "entity_type": self.entity_type,
             "entity_id": self.entity_id,
             "description": self.description,
-            "created_at": self.created_at.isoformat()
+            "created_at": format_datetime(self.created_at)
         }
 
     def to_dict_full(self):

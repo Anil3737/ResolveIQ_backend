@@ -6,14 +6,6 @@ import sqlalchemy as sa
 
 auth_bp = Blueprint('auth', __name__)
 
-@auth_bp.route('/debug/jwt', methods=['GET'])
-def debug_jwt():
-    auth_header = request.headers.get('Authorization')
-    return jsonify({
-        "auth_header_present": auth_header is not None,
-        "auth_header_prefix": auth_header[:10] if auth_header else None,
-        "all_headers": dict(request.headers)
-    }), 200
 
 @auth_bp.route('/health', methods=['GET'])
 def health():
@@ -84,4 +76,28 @@ def get_me():
         }), 200
     except Exception as e:
         print(f"❌ ME ERROR: {str(e)}")
+        return jsonify({"success": False, "message": "Server error"}), 500
+
+@auth_bp.route('/change-password', methods=['POST'])
+@jwt_required()
+def change_password():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "No data provided"}), 400
+        
+        new_password = data.get('password')
+        if not new_password or len(new_password) < 8:
+            return jsonify({"success": False, "message": "Password must be at least 8 characters long"}), 400
+        
+        from app.services.auth_service import AuthService
+        success, message = AuthService.change_password(current_user.id, new_password)
+        
+        if success:
+            return jsonify({"success": True, "message": message}), 200
+        else:
+            return jsonify({"success": False, "message": message}), 400
+            
+    except Exception as e:
+        print(f"❌ CHANGE PASSWORD ERROR: {str(e)}")
         return jsonify({"success": False, "message": "Server error"}), 500

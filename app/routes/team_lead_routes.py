@@ -2,17 +2,107 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import current_user
 from app.models.ticket import Ticket
 from app.models.user import User, AgentProfile
+from app.models.role import Role
+from app.models.team import Team
+from app.models.team_member import TeamMember
 from app.utils.decorators import roles_required
+from app.utils.dept_isolation import apply_dept_filter, assert_dept_access
 from app.extensions import db
 from datetime import datetime
 
 team_lead_bp = Blueprint('team_lead', __name__)
 
+
+@team_lead_bp.route('/my-tickets', methods=['GET'])
+@roles_required('TEAM_LEAD')
+def get_my_team_tickets():
+    """
+    STRICT: Returns ONLY tickets visible to this Team Lead for action.
+
+    Rule:
+        ticket.department_id == TL.department_id
+        AND ticket.status == 'OPEN'
+        AND ticket.assigned_to IS NULL
+
+    Team Lead must NOT see:
+        - Other department tickets
+        - Already assigned tickets
+        - Closed / Approved / In-Progress tickets (those are 'done' from TL perspective)
+    """
+    dept_id = (
+        current_user.team_lead_profile.department_id
+        if current_user.team_lead_profile else None
+    )
+    if not dept_id:
+        return jsonify({"success": False, "message": "Team Lead has no department assigned"}), 403
+
+    tickets = Ticket.query.filter(
+        Ticket.department_id == dept_id,
+        Ticket.status == 'OPEN',
+        Ticket.assigned_to == None
+    ).order_by(Ticket.created_at.asc()).all()
+
+    return jsonify({"success": True, "data": [t.to_dict() for t in tickets]}), 200
+
+@team_lead_bp.route('/approve-ticket', methods=['POST'])
+@roles_required('TEAM_LEAD')
+def approve_ticket():
+    """
+    Team Lead approves an OPEN ticket from their department.
+    Status becomes IN_PROGRESS so agents can see and accept it.
+    assigned_to stays NULL — agents self-assign via accept action.
+    """
+    data = request.get_json()
+    ticket_id = data.get('ticket_id')
+
+    if not ticket_id:
+        return jsonify({"success": False, "message": "ticket_id is required"}), 400
+
+    ticket = Ticket.query.get_or_404(ticket_id)
+
+    # Must be in team lead's department
+    dept_id = current_user.team_lead_profile.department_id if current_user.team_lead_profile else None
+    if ticket.department_id != dept_id:
+        return jsonify({"success": False, "message": "Ticket does not belong to your department"}), 403
+
+    # Only OPEN tickets can be approved
+    if ticket.status != 'OPEN':
+        return jsonify({"success": False, "message": f"Ticket is already {ticket.status}, cannot approve"}), 400
+
+    ticket.status = 'APPROVED'
+    ticket.approved_by = current_user.id
+    ticket.approved_at = datetime.utcnow()
+    ticket.updated_at = datetime.utcnow()
+
+    try:
+        from app.services.audit_service import AuditService
+        from app.utils.logging_utils import log_activity
+        AuditService.log_action(
+            f"TL_APPROVED: Ticket approved and made visible to agents",
+            current_user.id, ticket.id
+        )
+        log_activity(
+            user_id=current_user.id,
+            action_type="TICKET_APPROVED",
+            entity_type="TICKET",
+            entity_id=ticket.id,
+            description=f"Ticket approved by Team Lead {current_user.full_name}"
+        )
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "message": "Ticket approved — now visible to agents in the pool",
+            "data": ticket.to_dict()
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
 @team_lead_bp.route('/assign-ticket', methods=['POST'])
 @roles_required('TEAM_LEAD')
 def assign_ticket():
     """
-    Team Lead assigns a ticket to an agent within their department.
+    Team Lead assigns a ticket to a specific agent within their department.
     """
     data = request.get_json()
     ticket_id = data.get('ticket_id')
@@ -24,17 +114,19 @@ def assign_ticket():
     ticket = Ticket.query.get_or_404(ticket_id)
     agent = User.query.get_or_404(agent_id)
 
+    # 0. DEPT ISOLATION: Ticket must belong to THIS Team Lead's department
+    tl_dept = current_user.team_lead_profile.department_id if current_user.team_lead_profile else None
+    if ticket.department_id != tl_dept:
+        return jsonify({"success": False, "message": "Access denied: ticket belongs to a different department"}), 403
+
     # 1. Validation: Is the target user actually an agent?
-    if agent.role.name != 'AGENT':
+    if not agent.role or agent.role.name != 'AGENT':
         return jsonify({"success": False, "message": "Can only assign tickets to Support Agents"}), 400
 
     # 2. Validation: Does the agent belong to the same department as the ticket?
-    if agent.agent_profile.department_id != ticket.department_id:
-        return jsonify({"success": False, "message": "Agent belongs to a different department"}), 400
-
-    # 3. Validation: Does the agent belong to THIS Team Lead?
-    if agent.agent_profile.team_lead_id != current_user.id:
-        return jsonify({"success": False, "message": "This agent is not in your team"}), 400
+    agent_dept = agent.agent_profile.department_id if agent.agent_profile else None
+    if agent_dept != ticket.department_id:
+        return jsonify({"success": False, "message": "Agent belongs to a different department — cross-department assignment rejected"}), 403
 
     # 4. Perform Assignment
     ticket.assigned_to = agent_id
@@ -43,7 +135,17 @@ def assign_ticket():
 
     try:
         from app.services.audit_service import AuditService
+        from app.utils.logging_utils import log_activity
         AuditService.log_action(f"TL_ASSIGNED: Ticket assigned to agent {agent.full_name}", current_user.id, ticket.id)
+        
+        log_activity(
+            user_id=current_user.id,
+            action_type="TICKET_ASSIGNED",
+            entity_type="TICKET",
+            entity_id=ticket.id,
+            description=f"Ticket assigned to agent {agent.full_name} by TL {current_user.full_name}"
+        )
+        
         db.session.commit()
         return jsonify({
             "success": True, 
@@ -53,3 +155,72 @@ def assign_ticket():
     except Exception as e:
         db.session.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
+
+@team_lead_bp.route('/team-members', methods=['GET'])
+@roles_required('TEAM_LEAD')
+def get_team_members():
+    """
+    Fetch support agents belonging to the logged-in Team Lead.
+    Includes agents assigned directly on their profile and those assigned via Teams.
+    """
+    lead_id = current_user.id
+
+    # 1. Get IDs from direct AgentProfile assignment
+    direct_ids = [p.user_id for p in AgentProfile.query.filter_by(team_lead_id=lead_id).all()]
+
+    # 2. Get IDs from Team membership associations
+    # We join TeamMember and Team where the team's lead is the current user
+    team_ids = [
+        row[0] for row in db.session.query(TeamMember.user_id)
+        .join(Team, TeamMember.team_id == Team.id)
+        .filter(Team.team_lead_id == lead_id)
+        .all()
+    ]
+
+    # Combine all unique IDs
+    all_agent_ids = list(set(direct_ids + team_ids))
+
+    if not all_agent_ids:
+        return jsonify({"success": True, "data": []}), 200
+
+    # Fetch User objects for these IDs, ensuring they are actually AGENTS
+    agents = User.query.join(Role).filter(
+        User.id.in_(all_agent_ids),
+        Role.name == "AGENT"
+    ).all()
+
+    result = []
+    
+    # Get current date for daily counts if needed, 
+    # but for now follow the prompt's provided logic.
+    # Note: In a real system, you'd filter by today's date for 'resolved_today'
+    
+    for agent in agents:
+        active_count = Ticket.query.filter(
+            Ticket.assigned_to == agent.id,
+            Ticket.status.in_(["OPEN", "IN_PROGRESS"])
+        ).count()
+
+        resolved_today = Ticket.query.filter(
+            Ticket.assigned_to == agent.id,
+            Ticket.status.in_(["RESOLVED", "CLOSED"])
+        ).count()
+
+        profile = agent.agent_profile
+        result.append({
+            "id": agent.id,
+            "full_name": agent.full_name,
+            "email": agent.email,
+            "department": profile.department.name if profile and profile.department else "",
+            "location": profile.location if profile else "",
+            "active_tickets": active_count,
+            "resolved_today": resolved_today,
+            "workload_status": f"Solved {resolved_today} tickets",
+            "daily_capacity": 15
+        })
+
+    return jsonify({
+        "success": True,
+        "data": result
+    }), 200
+

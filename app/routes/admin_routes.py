@@ -8,6 +8,7 @@ from app.models.system_activity_log import SystemActivityLog
 from app.models.department import Department
 from app.services.auth_service import AuthService
 from app.models.team import Team
+from app.models.team_member import TeamMember
 from app.extensions import db
 import re
 import random
@@ -78,6 +79,7 @@ def create_team():
         description = data.get('description', '').strip()
         department_id = data.get('department_id')
         team_lead_id = data.get('team_lead_id')
+        agent_ids = data.get('agent_ids', []) # List of user IDs
 
         if not name:
             return jsonify({"success": False, "message": "Team name is required"}), 400
@@ -94,13 +96,38 @@ def create_team():
         )
 
         db.session.add(new_team)
-        db.session.flush() # Get the ID for auditing
+        db.session.flush() # Get the ID for auditing and members
+
+        # Add assigned agents
+        if agent_ids:
+            print(f"Processing {len(agent_ids)} agents for team {new_team.id}")
+            from app.models.user import AgentProfile
+            for agent_id in agent_ids:
+                # 1. Store association in TeamMember table
+                member = TeamMember(team_id=new_team.id, user_id=agent_id)
+                db.session.add(member)
+                
+                # 2. Update AgentProfile to officially link to the Team Lead
+                agent_profile = AgentProfile.query.filter_by(user_id=agent_id).first()
+                if agent_profile:
+                    agent_profile.team_lead_id = team_lead_id
+                    print(f"Updated AgentProfile for User {agent_id} (Team Lead: {team_lead_id})")
+                else:
+                    print(f"No AgentProfile found for User {agent_id}")
+        else:
+            print("No agent_ids provided in request")
 
         try:
-            from app.services.audit_service import AuditService
-            AuditService.log_action(f"ADMIN_CREATE_TEAM: Created team {name}", current_user.id, new_team.id)
+            log = SystemActivityLog(
+                user_id=current_user.id,
+                action_type="CREATE",
+                entity_type="TEAM",
+                entity_id=new_team.id,
+                description=f"Admin created team: {name}"
+            )
+            db.session.add(log)
         except Exception as e:
-            print(f"⚠️ AUDIT ERROR: {e}")
+            print(f"ACTIVITY LOG ERROR: {e}")
 
         db.session.commit()
         
@@ -116,7 +143,26 @@ def create_team():
 
     except Exception as e:
         db.session.rollback()
-        print(f"❌ ERROR in create_team: {str(e)}")
+        print(f"ERROR in create_team: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@admin_bp.route('/teams/<int:team_id>/members', methods=['GET'])
+@roles_required('ADMIN')
+def get_admin_team_members(team_id):
+    try:
+        # Fetch agents purely by team association
+        members = User.query.join(TeamMember, User.id == TeamMember.user_id)\
+                            .join(Role)\
+                            .filter(TeamMember.team_id == team_id, Role.name == "AGENT").all()
+        
+        print(f"Found {len(members)} agents for team {team_id}")
+        
+        return jsonify({
+            "success": True,
+            "data": [m.to_dict() for m in members]
+        }), 200
+    except Exception as e:
+        print(f"ERROR fetching team members: {str(e)}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/audit-logs', methods=['GET'])
@@ -232,7 +278,8 @@ def create_staff():
             "password": "Resolveiq@123",
             "role": role_name,
             "department_id": dept.id,
-            "location": location
+            "location": location,
+            "require_password_change": True
         }
 
         user, message = AuthService.register_user(staff_data, creator_id=current_user.id)
@@ -254,7 +301,7 @@ def create_staff():
             return jsonify({"success": False, "message": message}), 400
 
     except Exception as e:
-        print(f"❌ ERROR in create_staff: {str(e)}")
+        print(f"ERROR in create_staff: {str(e)}")
         return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
 
 @admin_bp.route('/create-agent', methods=['POST'])
@@ -272,7 +319,7 @@ def create_agent():
         full_name = data.get('full_name', '').strip()
         emp_id = data.get('emp_id', '').strip()
         dept_name = data.get('department', '').strip()
-        team_lead_id = data.get('team_lead_id')
+        team_lead_id = data.get('team_lead_id') # Now optional
         location = data.get('location', '').strip()
 
         # --- VALIDATION RULES ---
@@ -291,16 +338,16 @@ def create_agent():
         if not dept:
             return jsonify({"success": False, "message": f"Department '{dept_name}' not found"}), 400
 
-        # 4. Team Lead Validation
-        if not team_lead_id:
-            return jsonify({"success": False, "message": "Team Lead ID is required"}), 400
-        
-        team_lead = User.query.get(team_lead_id)
-        if not team_lead:
-            return jsonify({"success": False, "message": "Team Lead not found"}), 400
-        
-        if not team_lead.role or team_lead.role.name != 'TEAM_LEAD':
-            return jsonify({"success": False, "message": "Assigned user is not a Team Lead"}), 400
+        # 4. Team Lead Validation (Optional now)
+        if team_lead_id:
+            team_lead = User.query.get(team_lead_id)
+            if not team_lead:
+                return jsonify({"success": False, "message": "Team Lead not found"}), 400
+            
+            if not team_lead.role or team_lead.role.name != 'TEAM_LEAD':
+                return jsonify({"success": False, "message": "Assigned user is not a Team Lead"}), 400
+        else:
+            team_lead = None
         
         # 5. Get Role Lookup (AGENT)
         agent_role = Role.query.filter_by(name="AGENT").first()
@@ -330,7 +377,8 @@ def create_agent():
             "role": "AGENT",
             "department_id": dept.id,
             "team_lead_id": team_lead_id,
-            "location": location
+            "location": location,
+            "require_password_change": True
         }
 
         user, message = AuthService.register_user(agent_data, creator_id=current_user.id)
@@ -346,34 +394,18 @@ def create_agent():
                     "emp_id": user.phone,
                     "role": "AGENT",
                     "department": dept_name,
-                    "team_lead": team_lead.full_name
+                    "team_lead": team_lead.full_name if team_lead else "Unassigned"
                 }
             }), 201
         else:
             return jsonify({"success": False, "message": message}), 400
 
     except Exception as e:
-        print(f"❌ ERROR in create_agent: {str(e)}")
+        db.session.rollback()
+        print(f"ERROR in create_agent: {str(e)}")
         return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
 
-        db.session.commit()
-        print(f"❌ ERROR in create_agent: {str(e)}")
-        return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
-
-@admin_bp.route('/tickets', methods=['GET'])
-@roles_required('ADMIN')
-def get_all_tickets():
-    """Fetch all tickets for admin view."""
-    try:
-        from app.models.ticket import Ticket
-        tickets = Ticket.query.order_by(Ticket.created_at.desc()).all()
-        return jsonify({
-            "success": True, 
-            "data": [t.to_dict() for t in tickets]
-        }), 200
-    except Exception as e:
-        print(f"❌ ERROR fetching tickets: {str(e)}")
-        return jsonify({"success": False, "message": str(e)}), 500
+# Redundant /tickets route removed - use ticket_routes.py instead
 
 @admin_bp.route('/system-activity', methods=['GET'])
 @roles_required('ADMIN')
@@ -425,7 +457,7 @@ def get_system_activity():
             "logs": [log.to_dict() for log in logs]
         }), 200
     except Exception as e:
-        print(f"❌ ERROR fetching activity logs: {str(e)}")
+        print(f"ERROR fetching activity logs: {str(e)}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/dashboard', methods=['GET'])
@@ -487,6 +519,7 @@ def get_dashboard_metrics():
             "top_risky_tickets": [
                 {
                     "id": t.id,
+                    "ticket_number": t.ticket_number,
                     "title": t.title,
                     "status": t.status,
                     "ai_score": t.ai_score
@@ -495,5 +528,5 @@ def get_dashboard_metrics():
         }), 200
         
     except Exception as e:
-        print(f"❌ ERROR fetching dashboard metrics: {str(e)}")
+        print(f"ERROR fetching dashboard metrics: {str(e)}")
         return jsonify({"success": False, "message": str(e)}), 500

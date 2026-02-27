@@ -13,6 +13,7 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     role_id = db.Column(db.Integer, db.ForeignKey('roles.id'), nullable=False, default=4) # 4 = EMPLOYEE
     is_active = db.Column(db.Boolean, default=True)
+    require_password_change = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -29,7 +30,8 @@ class User(db.Model):
         if is_valid and self.password_hash.startswith("pbkdf2:sha256:"):
             from app.utils.password_utils import hash_password
             self.password_hash = hash_password(password)
-            db.session.commit()
+            db.session.add(self)
+            db.session.flush()  # Don't commit — let the caller control the transaction
             print(f"✅ Upgraded hash to bcrypt for: {self.email}")
             
         return is_valid
@@ -41,17 +43,20 @@ class User(db.Model):
             "email": self.email,
             "phone": self.phone,
             "role": self.role.name if self.role else "EMPLOYEE",
-            "role_id": self.role_id
+            "role_id": self.role_id,
+            "require_password_change": self.require_password_change
         }
         
+        role_name = self.role.name if self.role else None
+
         # Dynamically include profile data based on role
-        if self.role_id == 2: # TEAM_LEAD
+        if role_name == 'TEAM_LEAD':
             if self.team_lead_profile:
                 data["department_id"] = self.team_lead_profile.department_id
                 data["department_name"] = self.team_lead_profile.department.name if self.team_lead_profile.department else None
                 data["location"] = self.team_lead_profile.location
         
-        elif self.role_id == 3: # AGENT
+        elif role_name == 'AGENT':
             if self.agent_profile:
                 data["department_id"] = self.agent_profile.department_id
                 data["department_name"] = self.agent_profile.department.name if self.agent_profile.department else None
@@ -60,7 +65,7 @@ class User(db.Model):
                     data["team_lead_id"] = self.agent_profile.team_lead_id
                     data["team_lead_name"] = self.agent_profile.team_lead.full_name
         
-        elif self.role_id == 4: # EMPLOYEE
+        elif role_name == 'EMPLOYEE':
             if self.employee_profile:
                 data["location"] = self.employee_profile.location
                 

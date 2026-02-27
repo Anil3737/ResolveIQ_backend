@@ -22,7 +22,7 @@ class Config:
     # Connection pooling and stability
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,
-        "pool_recycle": 3600,
+        "pool_recycle": 1800,  # Recycled every 30 mins to avoid stale connections
         "pool_size": 10,
         "max_overflow": 20
     }

@@ -20,7 +20,14 @@ class RiskEngine:
         "security": 10,
         "leak": 10,
         "breach": 10,
-        "outage": 10
+        "outage": 10,
+        "broken": 5,
+        "error": 5,
+        "failed": 6,
+        "timeout": 5,
+        "major": 7,
+        "unusable": 8,
+        "bug": 4
     }
 
     # 2. Impact Scope (Weight 20%)
@@ -30,7 +37,10 @@ class RiskEngine:
         "whole department": 8,
         "multiple systems": 7,
         "company wide": 10,
-        "everyone": 5
+        "everyone": 5,
+        "team": 4,
+        "floor": 6,
+        "office": 5
     }
 
     # 3. Urgency Signals (Weight 15%)
@@ -40,7 +50,10 @@ class RiskEngine:
         "deadline": 5,
         "production": 5,
         "right now": 5,
-        "broken": 3
+        "need help": 3,
+        "pending": 2,
+        "soon": 2,
+        "quickly": 3
     }
 
     @staticmethod
@@ -85,10 +98,14 @@ class RiskEngine:
         # 5. Complexity Factor (Weight 10%)
         # Simple length and technicality check
         words = text.split()
-        complexity_score = min(10, len(words) // 10) # 1 point per 10 words, max 10
+        complexity_score = min(10, len(words) // 5) # 1 point per 5 words, max 10
+
+        # 6. Base Score Mechanism
+        # Ensures valid tickets don't start at 0
+        base_score = 15 if len(words) > 3 else 5
 
         # Total Calculation
-        total_score = severity_score + impact_score + urgency_score + history_score + complexity_score
+        total_score = base_score + severity_score + impact_score + urgency_score + history_score + complexity_score
         
         # Normalization
         final_score = min(100, max(0, total_score))

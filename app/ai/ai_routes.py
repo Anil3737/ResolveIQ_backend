@@ -10,7 +10,7 @@ from app.extensions import db
 
 ai_bp = Blueprint("ai", __name__)
 
-@ai_bp.route("/ai/analyze/<int:ticket_id>", methods=["POST"])
+@ai_bp.route("/analyze/<int:ticket_id>", methods=["POST"])
 @jwt_required()
 def analyze_ticket(ticket_id):
     """Run AI analysis on a ticket and auto-update priority"""
@@ -75,7 +75,7 @@ def analyze_ticket(ticket_id):
         **ai_result
     })
 
-@ai_bp.route("/ai/analysis/<int:ticket_id>", methods=["GET"])
+@ai_bp.route("/analysis/<int:ticket_id>", methods=["GET"])
 @jwt_required()
 def get_ai_analysis(ticket_id):
     """Get existing AI analysis for a ticket without re-running"""

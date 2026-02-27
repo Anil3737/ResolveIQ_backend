@@ -1,5 +1,10 @@
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
+
+def format_datetime(dt):
+    if dt:
+        return dt.replace(tzinfo=timezone.utc).isoformat()
+    return None
 
 class TicketAI(db.Model):
     __tablename__ = "ticket_ai"
@@ -24,5 +29,5 @@ class TicketAI(db.Model):
             "similarity_risk": self.similarity_risk,
             "sla_breach_risk": self.sla_breach_risk,
             "explanation": self.explanation_json,
-            "analyzed_at": self.analyzed_at.isoformat() if self.analyzed_at else None
+            "analyzed_at": format_datetime(self.analyzed_at)
         }

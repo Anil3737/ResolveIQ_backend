@@ -12,18 +12,19 @@ class AIScoringService:
         text = (title + " " + description).lower()
         
         # 1. Base AI Score (0-100)
-        score = 10  # Baseline
+        words = text.split()
+        score = 20 if len(words) > 3 else 10  # Baseline improved
         
         critical_matches = [w for w in AIScoringService.CRITICAL if re.search(r'\b' + w + r'\b', text)]
         high_matches = [w for w in AIScoringService.HIGH if re.search(r'\b' + w + r'\b', text)]
         medium_matches = [w for w in AIScoringService.MEDIUM if re.search(r'\b' + w + r'\b', text)]
         
         if critical_matches:
-            score += 50 + (len(critical_matches) * 10)
+            score += 45 + (len(critical_matches) * 10)
         elif high_matches:
-            score += 30 + (len(high_matches) * 5)
+            score += 25 + (len(high_matches) * 5)
         elif medium_matches:
-            score += 10 + (len(medium_matches) * 2)
+            score += 5 + (len(medium_matches) * 2)
             
         score = min(score, 100)
         

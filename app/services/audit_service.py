@@ -10,4 +10,3 @@ class AuditService:
             ticket_id=ticket_id
         )
         db.session.add(log)
-        db.session.commit()

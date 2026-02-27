@@ -4,6 +4,8 @@ from app.models.ticket import Ticket
 from app.services.ai_scoring import AIScoringService
 from app.services.audit_service import AuditService
 from app.utils.logging_utils import log_activity
+from app.utils.ticket_id_generator import generate_ticket_number
+from app.utils.dept_isolation import resolve_department_id
 
 class TicketService:
     @staticmethod
@@ -11,17 +13,40 @@ class TicketService:
         """
         Creates a ticket with auto-generated AI metrics and SLA details.
         Ensures transactional safety, auto-escalation, and Team Lead assignment.
+
+        DEPARTMENT OVERRIDE:
+            The department_id is ALWAYS derived from issue_type regardless of what
+            the frontend sends.  This prevents cross-department ticket injection.
         """
         try:
             from app.models.user import TeamLeadProfile
             from app.ai.risk_engine import RiskEngine
-            
+
             title = data.get('title')
             description = data.get('description')
-            department_id = data.get('department_id')
+            issue_type = data.get('issue_type')        # New field (enforced override)
+            department_id = data.get('department_id')  # Legacy field (fallback)
 
-            if not all([title, description, department_id]):
-                raise ValueError("Missing required fields: title, description, or department_id")
+            # ── STEP 1: Validate required fields ────────────────────────────
+            if not all([title, description]):
+                raise ValueError("Missing required fields: title and description")
+
+            # ── STEP 2: Enforce Issue Type → Department mapping ──────────────
+            # If issue_type is provided: ALWAYS override department_id from it.
+            # If only department_id is sent (old frontend): use it as-is.
+            # Both must be absent → reject.
+            if issue_type:
+                department_id = resolve_department_id(issue_type)
+                print(f"🔒 DEPT OVERRIDE: issue_type='{issue_type}' → department_id={department_id}")
+            elif department_id:
+                print(f"⚠️  LEGACY: no issue_type sent, using department_id={department_id} directly")
+            else:
+                raise ValueError("Missing required field: provide either 'issue_type' or 'department_id'")
+
+            if len(title) > 200:
+                raise ValueError("Title must be 200 characters or less")
+            if len(description) > 5000:
+                raise ValueError("Description must be 5000 characters or less")
 
             # 1. NEW: Modular Risk Engine Analysis
             risk_result = RiskEngine.calculate(title, description)
@@ -44,12 +69,8 @@ class TicketService:
                 priority = "P1"
                 print(f"🔥 AUTO-ESCALATING TICKET: {title} (Score: {score})")
 
-            # --- TEAM LEAD ASSIGNMENT LOGIC ---
+            # Tickets start unassigned — Team Lead must explicitly approve
             assigned_to = None
-            tl_profile = TeamLeadProfile.query.filter_by(department_id=department_id).first()
-            if tl_profile:
-                assigned_to = tl_profile.user_id
-                print(f"📍 AUTO-ASSIGNING TO TEAM LEAD: {tl_profile.user_id} for Dept: {department_id}")
 
             # 2. Map and Commit to DB
             ticket = Ticket(
@@ -69,15 +90,19 @@ class TicketService:
             )
 
             db.session.add(ticket)
-            db.session.flush() # Get ticket.id
+            db.session.flush()  # Reserve the row/id first
 
-            # Log Activity
+            # 3. Generate and assign the public ticket number (same transaction)
+            # This calls with_for_update() which locks concurrent generation.
+            ticket.ticket_number = generate_ticket_number(ticket.department_id)
+
+            # 4. Log Activity
             log_activity(
                 user_id=user_id,
                 action_type="TICKET_CREATED",
                 entity_type="TICKET",
                 entity_id=ticket.id,
-                description=f"Ticket created: {title}"
+                description=f"Ticket created: {title} [{ticket.ticket_number}]"
             )
 
             if escalation_required:
@@ -89,16 +114,15 @@ class TicketService:
                     description=f"Ticket auto escalated due to high risk ({score}%)"
                 )
 
-            db.session.commit()
-            
-            # 3. Log Actions
+            # 5. Log Actions (Move before commit)
             try:
                 AuditService.log_action(f"Created ticket: {title}", user_id, ticket.id)
                 if escalation_required:
                     AuditService.log_action(f"AUTO_ESCALATED: High risk level ({score}%)", 1, ticket.id) # 1 = System/Admin
             except Exception as audit_err:
                 print(f"⚠️ AUDIT LOG ERROR: {str(audit_err)}")
-            
+
+            db.session.commit()
             return ticket
             
         except Exception as e:
@@ -143,7 +167,11 @@ class TicketService:
         # 2. Strict Transition Validation
         allowed = False
         
-        if current_status == "OPEN" and new_status == "IN_PROGRESS":
+        if (current_status == "OPEN" and new_status == "APPROVED"):
+            if role in ["TEAM_LEAD", "ADMIN"]: # TL or Admin can approve
+                allowed = True
+        
+        elif (current_status in ["OPEN", "APPROVED"]) and new_status == "IN_PROGRESS":
             if role in ["TEAM_LEAD", "AGENT"]:
                 allowed = True
         
