@@ -119,8 +119,10 @@ class AuthService:
     def login_user(email, password):
         try:
             user = User.query.filter_by(email=email).first()
-            if not user or not user.check_password(password):
-                return None, "Invalid email or password"
+            if not user:
+                return None, "Incorrect email"
+            if not user.check_password(password):
+                return None, "Incorrect password"
             
             # Log the login activity
             log_activity(

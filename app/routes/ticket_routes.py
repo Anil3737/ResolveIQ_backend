@@ -17,7 +17,7 @@ def create_ticket():
     data = request.get_json()
     user_id = current_user.id
     ticket = TicketService.create_ticket(data, user_id)
-    return jsonify({"success": True, "data": ticket.to_dict()}), 201
+    return jsonify({"success": True, "data": ticket.to_dict(role="EMPLOYEE")}), 201
 
 @ticket_bp.route('', methods=['GET'])
 @jwt_required()
@@ -72,7 +72,7 @@ def get_tickets():
     else:
         tickets = Ticket.query.filter_by(created_by=user_id).all()
 
-    return jsonify({"success": True, "data": [t.to_dict() for t in tickets]}), 200
+    return jsonify({"success": True, "data": [t.to_dict(role=user_role) for t in tickets]}), 200
 
 def _build_progress(ticket):
     """
@@ -157,7 +157,7 @@ def get_ticket(id):
 
     # ADMIN — unrestricted access
 
-    ticket_dict = ticket.to_dict()
+    ticket_dict = ticket.to_dict(role=user_role)
     if user_role == "AGENT":
         # can_accept if:
         # 1. Unassigned APPROVED pool ticket (original logic)
@@ -204,7 +204,7 @@ def assign_ticket(id):
         return jsonify({"success": False, "message": "Agent belongs to a different department — cross-department assignment rejected"}), 403
 
     ticket = TicketService.assign_ticket(id, agent_id, user_id)
-    return jsonify({"success": True, "data": ticket.to_dict()}), 200
+    return jsonify({"success": True, "data": ticket.to_dict(role="TEAM_LEAD")}), 200
 
 @ticket_bp.route('/update-status', methods=['POST'])
 @jwt_required()
@@ -220,7 +220,7 @@ def update_ticket_status():
         ticket = TicketService.update_ticket_status(ticket_id, new_status, current_user)
         return jsonify({
             "success": True, 
-            "data": ticket.to_dict()
+            "data": ticket.to_dict(role=current_user.role.name if current_user.role else "EMPLOYEE")
         }), 200
     except (ValueError, PermissionError) as e:
         return jsonify({"success": False, "message": str(e)}), 403

@@ -49,7 +49,7 @@ class Ticket(db.Model):
     approver = db.relationship('User', foreign_keys=[approved_by], backref='approved_tickets')
     department = db.relationship('Department', backref='tickets')
 
-    def to_dict(self):
+    def to_dict(self, role=None):
         now = datetime.utcnow()
         
         # SLA Countdown
@@ -70,6 +70,9 @@ class Ticket(db.Model):
             else:
                 auto_close_in = 0
 
+        # Masking AI fields for Employees
+        is_employee = role == "EMPLOYEE"
+        
         return {
             "id": self.id,
             "ticket_number": self.ticket_number,
@@ -84,16 +87,16 @@ class Ticket(db.Model):
             "assigned_to_name": self.assigned_user.full_name if self.assigned_user else None,
             "status": self.status,
             "priority": self.priority,
-            "ai_score": self.ai_score,
-            "breach_risk": int(self.breach_risk * 100),
+            "ai_score": self.ai_score if not is_employee else None,
+            "breach_risk": int(self.breach_risk * 100) if not is_employee else None,
             "sla_hours": self.sla_hours,
             "sla_deadline": format_datetime(self.sla_deadline),
             "sla_remaining_seconds": sla_remaining,
             "sla_breached": sla_breached,
             "auto_close_in_seconds": auto_close_in,
             "escalation_required": self.escalation_required,
-            "ai_explanation": self.ai_explanation if isinstance(self.ai_explanation, dict) else (json.loads(self.ai_explanation) if self.ai_explanation else None),
-            "risk_percentage": int(self.breach_risk * 100),
+            "ai_explanation": (self.ai_explanation if isinstance(self.ai_explanation, dict) else (json.loads(self.ai_explanation) if self.ai_explanation else None)) if not is_employee else None,
+            "risk_percentage": int(self.breach_risk * 100) if not is_employee else None,
             "created_at": format_datetime(self.created_at),
             "updated_at": format_datetime(self.updated_at),
             "approved_at": format_datetime(self.approved_at),

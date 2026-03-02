@@ -1,151 +1,116 @@
-<<<<<<< HEAD
-# ResolveIQ - AI-Based Support Ticket Prioritization Platform
+# ⚙️ ResolveIQ Backend: AI & Automation Engine
 
-## System Overview
-ResolveIQ is a production-ready end-to-end support ticket management system with AI-powered priority prediction and SLA breach risk assessment.
+[![Python](https://img.shields.io/badge/Python-3.8+-3776AB.svg?style=for-the-badge&logo=python)](https://www.python.org/)
+[![Flask](https://img.shields.io/badge/Flask-3.0+-000000.svg?style=for-the-badge&logo=flask)](https://flask.palletsprojects.com/)
+[![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1.svg?style=for-the-badge&logo=mysql)](https://www.mysql.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-## Tech Stack
-- **Backend**: Flask, MySQL, JWT Authentication, AI Scoring
-- **Frontend**: Android (Kotlin + Jetpack Compose), MVVM, Retrofit
+**ResolveIQ Backend** is the high-performance intelligence layer of the ResolveIQ ecosystem. It handles complex ticket orchestration, real-time AI risk assessment, and autonomous SLA management through a robust Flask-based micro-architecture.
 
-## Quick Setup Guide
+---
 
-### Prerequisites
+## 🧠 Advanced AI Risk Engine
+
+The core of ResolveIQ is a modular, weighted **Hybrid Intelligence Model** that provides explainable risk assessment for every ticket.
+
+### ⚖️ Weighted Scoring Algorithm
+The engine calculates a **Risk Score (0-100)** by analyzing textual patterns across five distinct dimensions:
+
+| Dimension | Weight | Description |
+| :--- | :---: | :--- |
+| **Severity** | 40% | Detects critical failure keywords (e.g., "outage", "crashed", "security breach"). |
+| **Impact** | 20% | Analyzes the scope of the issue (e.g., "entire floor", "all users", "company-wide"). |
+| **Urgency** | 15% | Identifies temporal signals (e.g., "ASAP", "immediately", "right now"). |
+| **History** | 15% | Factors in recurring issues or historically problematic departments. |
+| **Complexity**| 10% | Assesses technical depth based on description detail and metadata. |
+
+- **Explainable AI**: Every score comes with a natural language summary explaining *why* a ticket was flagged (e.g., "High-impact scope detected in IT Support").
+- **Dynamic Normalization**: Ensures that scores are statistically balanced to prevent false positives while capturing critical anomalies.
+
+---
+
+## ⚙️ Autonomous Background Workflows
+
+ResolveIQ features a **Self-Healing Automation Layer** powered by `APScheduler`, ensuring that no ticket is left behind.
+
+### 🕒 Real-Time Task Orchestration
+- **SLA Breach Guard (Every 5 min)**: Automatically detects tickets nearing or exceeding their deadlines.
+- **Auto-Escalation Logic**: If a breach occurs, the system autonomously elevates the priority to `P1` and triggers an `AUTO_ESCALATED` audit event.
+- **Queue Cleanup (Every 1 min)**:
+    - **Auto-Approval**: Moves `OPEN` tickets to `APPROVED` after 15 minutes of inactivity to ensure visibility.
+    - **Auto-Resolution**: Finalizes `RESOLVED` tickets into `CLOSED` status after 10 minutes, maintaining a clean workspace.
+
+---
+
+## 🏗 Industrial Architecture
+
+Designed for scalability and maintainability.
+
+```mermaid
+graph LR
+    subgraph "API Layer"
+        BP[Blueprints] --> RT[REST Controllers]
+    end
+    subgraph "Logic Layer"
+        RT --> AI[AI Risk Engine]
+        RT --> SRV[Service Layer]
+        SCH[APScheduler] --> SRV
+    end
+    subgraph "Data Layer"
+        SRV --> MDL[SQLAlchemy Models]
+        MDL --> DB[(MySQL)]
+    end
+```
+
+### 🔒 Enterprise Security
+- **RBAC (Role-Based Access Control)**: Granular decorators ensure only authorized roles (Admin, Lead, Agent, Employee) can access specific sensitive endpoints.
+- **JWT Authentication**: Stateless, secure communication across all client interactions.
+- **Audit Logging**: Comprehensive system activity tracking for compliance and transparency.
+
+---
+
+## 🚀 Deployment & Installation
+
+### 📋 Prerequisites
 - Python 3.8+
-- XAMPP (MySQL)
-- Android Studio (latest version)
-- JDK 11+
+- MySQL Server (XAMPP recommended)
+- Virtual Environment (`venv`)
 
-### Backend Setup
-
-1. **Start MySQL**:
+### 🛠 Setup Procedure
+1. **Repository Setup**:
+   ```bash
+   git clone https://github.com/Anil3737/ResolveIQ_backend.git
+   cd resolveiq_backend
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
-   Open XAMPP Control Panel → Start MySQL
-   ```
-
 2. **Install Dependencies**:
    ```bash
-   cd resolveiq_backend
    pip install -r requirements.txt
    ```
-
-3. **Initialize Database**:
+3. **Database Initialization**:
    ```bash
-   python create_db.py
-   python seed.py
+   python create_db.py     # Create schema
+   python seed_database.py # Seed initial departments and initial admin
    ```
+4. **Environment Configuration**:
+   Create a `.env` file based on the local environment requirements (DB_USER, DB_PASSWORD, SECRET_KEY).
 
-4. **Run Backend**:
+5. **Run Service**:
    ```bash
    python main.py
    ```
-   API will run at: `http://127.0.0.1:5000`
 
-### Android Setup
+---
 
-1. **Open Project**:
-   - Open Android Studio
-   - File → Open → Select `resolveiq_frontend`
+## 👨‍💻 Developed By
 
-2. **Configure API URL**:
-   - For Emulator: Use `http://10.0.2.2:5000/` (default in code)
-   - For Physical Device: Edit `RetrofitClient.kt` and change to your computer's local IP (e.g., `http://192.168.1.5:5000/`)
+**J Chiranjevi Anil**  
+*Computer Science & Engineering*  
+**SIMATS (Saveetha Institute of Medical and Technical Sciences)**
 
-3. **Sync and Build**:
-   - File → Sync Project with Gradle Files
-   - Build → Make Project
+---
 
-4. **Run**:
-   - Select device/emulator
-   - Run → Run 'app'
-
-## Test Accounts
-
-| Role | Email | Password |
-|------|-------|----------|
-| Admin | admin@resolveiq.com | Admin@123 |
-| Team Lead | lead@resolveiq.com | Lead@123 |
-| Agent | agent@resolveiq.com | Agent@123 |
-| Employee | employee@resolveiq.com | Emp@123 |
-
-## Features
-
-### Backend
-- JWT-based authentication
-- Role-based access control (ADMIN, TEAM_LEAD, AGENT, EMPLOYEE)
-- AI ticket scoring and priority prediction
-- SLA rule management
-- Automatic escalation flagging
-- Audit logging
-
-### Android App
-- Material 3 UI with Jetpack Compose
-- Role-specific dashboards
-- Real-time ticket management
-- AI-powered priority visualization
-- Secure token management with DataStore
-
-## API Documentation
-
-### Authentication
-- `POST /api/auth/register` - Employee registration
-- `POST /api/auth/login` - User login
-
-### Tickets
-- `POST /api/tickets` - Create ticket (Employee)
-- `GET /api/tickets` - List tickets (role-based)
-- `PATCH /api/tickets/{id}/assign` - Assign ticket (TeamLead)
-- `PATCH /api/tickets/{id}/status` - Update status (Agent)
-
-### Admin
-- `POST /api/admin/create-user` - Create TeamLead/Agent
-- `GET /api/admin/users` - List all users
-- `GET /api/admin/audit-logs` - View audit logs
-
-## Troubleshooting
-
-### Backend Issues
-- **Connection Error**: Ensure MySQL is running on port 3306
-- **Module Not Found**: Run `pip install -r requirements.txt`
-
-### Android Issues
-- **Build Errors**: File → Invalidate Caches → Restart
-- **Connection Refused**: Check API URL in RetrofitClient.kt
-- **Compose Errors**: Ensure Android Studio is updated to latest version
-
-## Project Structure
-
-### Backend
-```
-resolveiq_backend/
-├── app/
-│   ├── models/          # Database models
-│   ├── routes/          # API endpoints
-│   ├── services/        # Business logic
-│   └── utils/           # RBAC decorators
-├── db/                  # SQL scripts
-├── seed.py             # Database seeding
-└── main.py             # Entry point
-```
-
-### Android
-```
-resolveiq_frontend/
-└── app/src/main/java/com/resolveiq/
-    ├── data/
-    │   ├── api/         # Retrofit interface
-    │   ├── model/       # Data models
-    │   ├── repository/  # Data layer
-    │   └── datastore/   # Token management
-    └── ui/
-        ├── screens/     # Compose screens
-        ├── navigation/  # Navigation routes
-        └── viewmodel/   # ViewModels
-```
-
-## License
-MIT License
-=======
-# ResolveIQ_backend without ai and api implementation 
-fastapi
->>>>>>> 20a0d7bbc96ed8a8e008630a312601ea65791937
+<p align="center">
+  Generated with ❤️ by <b>Antigravity</b>
+</p>

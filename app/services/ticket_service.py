@@ -18,117 +18,100 @@ class TicketService:
             The department_id is ALWAYS derived from issue_type regardless of what
             the frontend sends.  This prevents cross-department ticket injection.
         """
-        try:
-            from app.models.user import TeamLeadProfile
-            from app.ai.risk_engine import RiskEngine
+        MAX_RETRIES = 3
+        last_error = None
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                from app.models.user import TeamLeadProfile
+                from app.ai.risk_engine import RiskEngine
+                import time
 
-            title = data.get('title')
-            description = data.get('description')
-            issue_type = data.get('issue_type')        # New field (enforced override)
-            department_id = data.get('department_id')  # Legacy field (fallback)
+                title = data.get('title')
+                description = data.get('description')
+                issue_type = data.get('issue_type')        # New field (enforced override)
+                department_id = data.get('department_id')  # Legacy field (fallback)
+                expected_res_time_str = data.get('expected_resolution_time') 
 
-            # ── STEP 1: Validate required fields ────────────────────────────
-            if not all([title, description]):
-                raise ValueError("Missing required fields: title and description")
+                # ── STEP 1: Validate required fields ────────────────────────────
+                if not all([title, description]):
+                    raise ValueError("Missing required fields: title and description")
 
-            # ── STEP 2: Enforce Issue Type → Department mapping ──────────────
-            # If issue_type is provided: ALWAYS override department_id from it.
-            # If only department_id is sent (old frontend): use it as-is.
-            # Both must be absent → reject.
-            if issue_type:
-                department_id = resolve_department_id(issue_type)
-                print(f"🔒 DEPT OVERRIDE: issue_type='{issue_type}' → department_id={department_id}")
-            elif department_id:
-                print(f"⚠️  LEGACY: no issue_type sent, using department_id={department_id} directly")
-            else:
-                raise ValueError("Missing required field: provide either 'issue_type' or 'department_id'")
+                # ── STEP 2: Enforce Issue Type → Department mapping ──────────────
+                if issue_type:
+                    department_id = resolve_department_id(issue_type)
+                elif not department_id:
+                    raise ValueError("Missing required field: provide either 'issue_type' or 'department_id'")
 
-            if len(title) > 200:
-                raise ValueError("Title must be 200 characters or less")
-            if len(description) > 5000:
-                raise ValueError("Description must be 5000 characters or less")
+                if len(title) > 200:
+                    raise ValueError("Title must be 200 characters or less")
 
-            # 1. NEW: Modular Risk Engine Analysis
-            risk_result = RiskEngine.calculate(title, description)
-            
-            # Legacy fields for backward compatibility/internal logic
-            # (Keeping AIScoringService call for SLA/Priority for now, OR migrating them here)
-            ai_meta = AIScoringService.compute_scoring(title, description)
-            
-            # Override with improved Risk Engine results
-            score = risk_result['score']
-            breach_risk = risk_result['risk']
-            ai_explanation = risk_result['explanation']
-            
-            # --- AUTO ESCALATION LOGIC ---
-            escalation_required = bool(ai_meta['escalation_required'])
-            priority = ai_meta['priority']
-            
-            if score > 70:
-                escalation_required = True
-                priority = "P1"
-                print(f"🔥 AUTO-ESCALATING TICKET: {title} (Score: {score})")
+                # 1. AI Analysis
+                risk_result = RiskEngine.calculate(title, description)
+                ai_meta = AIScoringService.compute_scoring(title, description)
+                
+                score = risk_result['score']
+                breach_risk = risk_result['risk']
+                ai_explanation = risk_result['explanation']
+                
+                escalation_required = bool(ai_meta['escalation_required'])
+                priority = ai_meta['priority']
+                
+                if score > 70:
+                    escalation_required = True
+                    priority = "P1"
 
-            # Tickets start unassigned — Team Lead must explicitly approve
-            assigned_to = None
-
-            # 2. Map and Commit to DB
-            ticket = Ticket(
-                title=title,
-                description=description,
-                department_id=department_id,
-                created_by=user_id,
-                assigned_to=assigned_to,
-                priority=priority,
-                ai_score=score,
-                breach_risk=breach_risk,
-                escalation_required=escalation_required,
-                ai_explanation=ai_explanation,
-                sla_hours=ai_meta.get('sla_hours', 24),
-                sla_deadline=ai_meta.get('sla_deadline'),
-                status='OPEN'
-            )
-
-            db.session.add(ticket)
-            db.session.flush()  # Reserve the row/id first
-
-            # 3. Generate and assign the public ticket number (same transaction)
-            # This calls with_for_update() which locks concurrent generation.
-            ticket.ticket_number = generate_ticket_number(ticket.department_id)
-
-            # 4. Log Activity
-            log_activity(
-                user_id=user_id,
-                action_type="TICKET_CREATED",
-                entity_type="TICKET",
-                entity_id=ticket.id,
-                description=f"Ticket created: {title} [{ticket.ticket_number}]"
-            )
-
-            if escalation_required:
-                log_activity(
-                    user_id=None,
-                    action_type="AUTO_ESCALATED",
-                    entity_type="TICKET",
-                    entity_id=ticket.id,
-                    description=f"Ticket auto escalated due to high risk ({score}%)"
+                # 2. Map and Commit to DB
+                ticket = Ticket(
+                    title=title,
+                    description=description,
+                    department_id=department_id,
+                    created_by=user_id,
+                    status='OPEN',
+                    priority=priority,
+                    ai_score=score,
+                    breach_risk=breach_risk,
+                    escalation_required=escalation_required,
+                    ai_explanation=ai_explanation,
+                    sla_hours=ai_meta.get('sla_hours', 24),
+                    sla_deadline=ai_meta.get('sla_deadline')
                 )
 
-            # 5. Log Actions (Move before commit)
-            try:
-                AuditService.log_action(f"Created ticket: {title}", user_id, ticket.id)
-                if escalation_required:
-                    AuditService.log_action(f"AUTO_ESCALATED: High risk level ({score}%)", 1, ticket.id) # 1 = System/Admin
-            except Exception as audit_err:
-                print(f"⚠️ AUDIT LOG ERROR: {str(audit_err)}")
+                # ── STEP 3: Override SLA if user provided expected resolution time ──
+                if expected_res_time_str:
+                    import re
+                    match = re.search(r'(\d+)', str(expected_res_time_str))
+                    if match:
+                        user_sla_hours = int(match.group(1))
+                        if user_sla_hours > 0:
+                            ticket.sla_hours = user_sla_hours
+                            ticket.sla_deadline = datetime.utcnow() + timedelta(hours=user_sla_hours)
 
-            db.session.commit()
-            return ticket
-            
-        except Exception as e:
-            db.session.rollback()
-            print(f"❌ DATABASE ERROR: {str(e)}")
-            raise e
+                db.session.add(ticket)
+                db.session.flush() 
+
+                # 3. Generate ticket number (locks for update)
+                ticket.ticket_number = generate_ticket_number(ticket.department_id)
+
+                # 4. Logs
+                log_activity(user_id=user_id, action_type="TICKET_CREATED", entity_type="TICKET", entity_id=ticket.id, description=f"Ticket created: {title} [{ticket.ticket_number}]")
+                AuditService.log_action(f"Created ticket: {title}", user_id, ticket.id)
+
+                db.session.commit()
+                return ticket
+
+            except Exception as e:
+                db.session.rollback()
+                # Check for MySQL Deadlock (OperationalError 1213)
+                # We handle both sqlalchemy.exc.OperationalError and pymysql.err.OperationalError
+                error_str = str(e)
+                if ("1213" in error_str or "Deadlock found" in error_str) and attempt < MAX_RETRIES - 1:
+                    print(f"🔄 DEADLOCK DETECTED (Attempt {attempt + 1}/{MAX_RETRIES}). Retrying in 0.5s...")
+                    time.sleep(0.5)
+                    continue
+                
+                print(f"❌ TICKET CREATION ERROR: {error_str}")
+                raise e
 
     @staticmethod
     def assign_ticket(ticket_id, agent_id, lead_id):

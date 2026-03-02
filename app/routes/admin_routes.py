@@ -26,6 +26,17 @@ def create_user():
         return jsonify({"success": True, "message": message, "data": user.to_dict()}), 201
     return jsonify({"success": False, "message": message}), 400
 
+@admin_bp.route('/check-id', methods=['GET'])
+@roles_required('ADMIN')
+def check_id_exists():
+    emp_id = request.args.get('emp_id', '').strip()
+    if not emp_id:
+        return jsonify({"success": False, "message": "emp_id is required"}), 400
+    
+    # Check phone column where emp_id is stored
+    user = User.query.filter_by(phone=emp_id).first()
+    return jsonify({"success": True, "exists": user is not None}), 200
+
 @admin_bp.route('/users', methods=['GET'])
 @roles_required('ADMIN')
 def get_users():
@@ -163,6 +174,127 @@ def get_admin_team_members(team_id):
         }), 200
     except Exception as e:
         print(f"ERROR fetching team members: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@admin_bp.route('/teams/<int:team_id>', methods=['PUT'])
+@roles_required('ADMIN')
+def update_team(team_id):
+    try:
+        team = Team.query.get_or_404(team_id)
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "No data provided"}), 400
+
+        name = data.get('name', '').strip()
+        description = data.get('description', '').strip()
+        department_id = data.get('department_id')
+        team_lead_id = data.get('team_lead_id')
+        agent_ids = data.get('agent_ids', [])
+
+        if not name:
+            return jsonify({"success": False, "message": "Team name is required"}), 400
+
+        # Check if name is taken by another team
+        existing_team = Team.query.filter(Team.name == name, Team.id != team_id).first()
+        if existing_team:
+            return jsonify({"success": False, "message": f"Team name '{name}' already exists"}), 400
+
+        # --- SYNC LOGIC FOR TEAM LEAD MODULE ---
+        from app.models.user import AgentProfile
+        
+        # 1. Identify current members before clearing
+        old_member_ids = [m.user_id for m in TeamMember.query.filter_by(team_id=team.id).all()]
+        
+        # 2. Clear existing associations for this team
+        TeamMember.query.filter_by(team_id=team.id).delete()
+        
+        # 3. For members removed from the team, clear their team_lead_id in AgentProfile
+        # But only if they were actually in THIS team
+        removed_ids = set(old_member_ids) - set(agent_ids)
+        for removed_id in removed_ids:
+            agent_profile = AgentProfile.query.filter_by(user_id=removed_id).first()
+            if agent_profile and agent_profile.team_lead_id == team.team_lead_id:
+                agent_profile.team_lead_id = None
+                print(f"Cleared Team Lead for removed agent {removed_id}")
+
+        # 4. Update team details
+        team.name = name
+        team.description = description
+        team.department_id = department_id
+        team.team_lead_id = team_lead_id
+
+        # 5. Add/Update members
+        for agent_id in agent_ids:
+            # Re-add association
+            new_member = TeamMember(team_id=team.id, user_id=agent_id)
+            db.session.add(new_member)
+            
+            # Sync AgentProfile to the new Team Lead and Department
+            agent_profile = AgentProfile.query.filter_by(user_id=agent_id).first()
+            if agent_profile:
+                agent_profile.team_lead_id = team_lead_id
+                agent_profile.department_id = department_id
+        
+        # Log Activity
+        try:
+            log = SystemActivityLog(
+                user_id=current_user.id,
+                action_type="UPDATE",
+                entity_type="TEAM",
+                entity_id=team.id,
+                description=f"Admin updated team: {name}"
+            )
+            db.session.add(log)
+        except Exception as e:
+            print(f"ACTIVITY LOG ERROR: {e}")
+
+        db.session.commit()
+        return jsonify({"success": True, "message": "Team updated successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERROR updating team: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@admin_bp.route('/teams/<int:team_id>', methods=['DELETE'])
+@roles_required('ADMIN')
+def delete_team(team_id):
+    try:
+        team = Team.query.get_or_404(team_id)
+        team_name = team.name
+
+        from app.models.user import AgentProfile
+        # Clear Team Lead linkage for all members of this team
+        members = TeamMember.query.filter_by(team_id=team_id).all()
+        for member in members:
+            agent_profile = AgentProfile.query.filter_by(user_id=member.user_id).first()
+            if agent_profile and agent_profile.team_lead_id == team.team_lead_id:
+                agent_profile.team_lead_id = None
+
+        # Clear associations
+        TeamMember.query.filter_by(team_id=team_id).delete()
+        
+        db.session.delete(team)
+
+        # Log Activity
+        try:
+            log = SystemActivityLog(
+                user_id=current_user.id,
+                action_type="DELETE",
+                entity_type="TEAM",
+                entity_id=team_id,
+                description=f"Admin deleted team: {team_name}"
+            )
+            db.session.add(log)
+        except Exception as e:
+            print(f"ACTIVITY LOG ERROR: {e}")
+
+        db.session.commit()
+        return jsonify({"success": True, "message": f"Team '{team_name}' deleted successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERROR deleting team: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/audit-logs', methods=['GET'])
