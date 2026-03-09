@@ -20,6 +20,7 @@ ISSUE_TYPE_DEPT_MAP = {
     "Network Issue": 1,
     "Hardware Failure": 2,
     "Software Installation": 3,
+    "Application Issues": 4,
     "Application Downtime / Application Issues": 4,
     "Other": 5,
 }

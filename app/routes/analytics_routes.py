@@ -1,42 +1,39 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, current_user
 from app.models.ticket import Ticket
+from app.models.user import User
 from app.extensions import db
-from sqlalchemy import func
+from sqlalchemy import func, case
+from datetime import datetime, timedelta
 
 analytics_bp = Blueprint('analytics', __name__)
 
+
+# ─────────────────────────────────────────────
+# Helper: build base query scoped by role
+# ─────────────────────────────────────────────
+def _base_query():
+    role = current_user.role.name if current_user.role else "EMPLOYEE"
+    if role == "ADMIN":
+        return Ticket.query, role
+    elif role == "TEAM_LEAD":
+        dept_id = current_user.team_lead_profile.department_id if current_user.team_lead_profile else None
+        return Ticket.query.filter(Ticket.department_id == dept_id), role
+    elif role == "AGENT":
+        dept_id = current_user.agent_profile.department_id if current_user.agent_profile else None
+        return Ticket.query.filter(Ticket.department_id == dept_id), role
+    else:
+        return Ticket.query.filter(Ticket.created_by == current_user.id), role
+
+
+# ─────────────────────────────────────────────
+# 1. Summary  (status + priority breakdown)
+# ─────────────────────────────────────────────
 @analytics_bp.route('/summary', methods=['GET'])
 @jwt_required()
 def get_summary():
-    """
-    Returns ticket summary counts, scoped by the caller's role and department.
-
-    DEPT ISOLATION:
-      ADMIN      → global counts across all tickets
-      TEAM_LEAD  → counts limited to their department
-      AGENT      → counts limited to their department
-      EMPLOYEE   → counts limited to their own created tickets
-    """
-    role = current_user.role.name if current_user.role else "EMPLOYEE"
-
-    # Build the department/ownership filter predicate
-    if role == "ADMIN":
-        dept_filter = True  # No restriction — SQLAlchemy ignores literal True
-        base_query = Ticket.query
-    elif role == "TEAM_LEAD":
-        dept_id = current_user.team_lead_profile.department_id if current_user.team_lead_profile else None
-        base_query = Ticket.query.filter(Ticket.department_id == dept_id)
-    elif role == "AGENT":
-        dept_id = current_user.agent_profile.department_id if current_user.agent_profile else None
-        base_query = Ticket.query.filter(Ticket.department_id == dept_id)
-    else:
-        # EMPLOYEE — only own tickets
-        base_query = Ticket.query.filter(Ticket.created_by == current_user.id)
-
+    base_query, _ = _base_query()
     total_tickets = base_query.count()
-
-    # Scope status/priority aggregates to the same filtered set
     ticket_ids = [t.id for t in base_query.with_entities(Ticket.id).all()]
 
     status_counts = (
@@ -60,3 +57,190 @@ def get_summary():
             "priority_summary": dict(priority_counts)
         }
     }), 200
+
+
+# ─────────────────────────────────────────────
+# 2. Tickets by Department
+# ─────────────────────────────────────────────
+@analytics_bp.route('/by-department', methods=['GET'])
+@jwt_required()
+def tickets_by_department():
+    """Count total, open, resolved tickets per department."""
+    try:
+        from app.models.department import Department
+        departments = Department.query.all()
+        result = []
+        for dept in departments:
+            total = Ticket.query.filter_by(department_id=dept.id).count()
+            if total == 0:
+                continue
+            open_count = Ticket.query.filter(
+                Ticket.department_id == dept.id,
+                Ticket.status.in_(['OPEN', 'APPROVED', 'IN_PROGRESS', 'ESCALATED'])
+            ).count()
+            resolved = Ticket.query.filter(
+                Ticket.department_id == dept.id,
+                Ticket.status.in_(['RESOLVED', 'CLOSED'])
+            ).count()
+            result.append({
+                "department": dept.name,
+                "total": total,
+                "open": open_count,
+                "resolved": resolved
+            })
+        result.sort(key=lambda x: x["total"], reverse=True)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ─────────────────────────────────────────────
+# 3. Ticket Creation Trend  (last N days, daily)
+# ─────────────────────────────────────────────
+@analytics_bp.route('/trend', methods=['GET'])
+@jwt_required()
+def tickets_trend():
+    """Daily ticket creation count for the last `days` days (default 30)."""
+    try:
+        days = int(request.args.get('days', 30))
+        days = min(max(days, 7), 90)  # clamp 7–90
+        base_query, _ = _base_query()
+
+        start = datetime.utcnow() - timedelta(days=days)
+        rows = (
+            db.session.query(
+                func.date(Ticket.created_at).label('day'),
+                func.count(Ticket.id).label('count')
+            )
+            .filter(Ticket.created_at >= start)
+            .filter(Ticket.id.in_([t.id for t in base_query.with_entities(Ticket.id).all()]))
+            .group_by(func.date(Ticket.created_at))
+            .order_by(func.date(Ticket.created_at))
+            .all()
+        )
+
+        # Fill gaps with 0
+        day_map = {str(r.day): r.count for r in rows}
+        result = []
+        for i in range(days):
+            d = (start + timedelta(days=i + 1)).date()
+            result.append({"date": str(d), "tickets": day_map.get(str(d), 0)})
+
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ─────────────────────────────────────────────
+# 4. Agent Performance
+# ─────────────────────────────────────────────
+@analytics_bp.route('/agent-performance', methods=['GET'])
+@jwt_required()
+def agent_performance():
+    """Per-agent: assigned, resolved, avg resolution time (hours)."""
+    try:
+        from app.models.role import Role
+        agent_role = Role.query.filter_by(name='AGENT').first()
+        if not agent_role:
+            return jsonify({"success": True, "data": []}), 200
+
+        agents = User.query.filter_by(role_id=agent_role.id, is_active=True).all()
+        result = []
+        for agent in agents:
+            assigned = Ticket.query.filter_by(assigned_to=agent.id).count()
+            if assigned == 0:
+                continue
+            resolved_tickets = Ticket.query.filter(
+                Ticket.assigned_to == agent.id,
+                Ticket.status.in_(['RESOLVED', 'CLOSED']),
+                Ticket.resolved_at.isnot(None)
+            ).all()
+            resolved_count = len(resolved_tickets)
+
+            # Average resolution time in hours
+            avg_hours = None
+            if resolved_count > 0:
+                total_seconds = sum(
+                    (t.resolved_at - t.created_at).total_seconds()
+                    for t in resolved_tickets
+                    if t.resolved_at and t.created_at
+                )
+                avg_hours = round(total_seconds / 3600 / resolved_count, 1)
+
+            resolution_rate = round((resolved_count / assigned) * 100, 1) if assigned else 0
+            result.append({
+                "agent": agent.full_name,
+                "emp_id": agent.phone or "",
+                "assigned": assigned,
+                "resolved": resolved_count,
+                "resolution_rate": resolution_rate,
+                "avg_resolution_hours": avg_hours
+            })
+
+        result.sort(key=lambda x: x["resolution_rate"], reverse=True)
+        return jsonify({"success": True, "data": result}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ─────────────────────────────────────────────
+# 5. SLA Compliance Report
+# ─────────────────────────────────────────────
+@analytics_bp.route('/sla-compliance', methods=['GET'])
+@jwt_required()
+def sla_compliance():
+    """Global SLA compliance % + per-department breakdown."""
+    try:
+        now = datetime.utcnow()
+        base_query, _ = _base_query()
+        ticket_ids = [t.id for t in base_query.with_entities(Ticket.id).all()]
+
+        # Only tickets that have an SLA deadline set
+        sla_tickets = Ticket.query.filter(
+            Ticket.id.in_(ticket_ids),
+            Ticket.sla_deadline.isnot(None)
+        ).all()
+
+        total_sla = len(sla_tickets)
+        breached = sum(
+            1 for t in sla_tickets
+            if t.sla_deadline < now and t.status not in ['RESOLVED', 'CLOSED']
+        )
+        met = total_sla - breached
+        compliance_pct = round((met / total_sla) * 100, 1) if total_sla else 100.0
+
+        # Per-department SLA compliance
+        from app.models.department import Department
+        departments = Department.query.all()
+        dept_breakdown = []
+        for dept in departments:
+            dept_tickets = [t for t in sla_tickets if t.department_id == dept.id]
+            if not dept_tickets:
+                continue
+            dept_breached = sum(
+                1 for t in dept_tickets
+                if t.sla_deadline < now and t.status not in ['RESOLVED', 'CLOSED']
+            )
+            dept_met = len(dept_tickets) - dept_breached
+            dept_pct = round((dept_met / len(dept_tickets)) * 100, 1)
+            dept_breakdown.append({
+                "department": dept.name,
+                "total": len(dept_tickets),
+                "met": dept_met,
+                "breached": dept_breached,
+                "compliance_pct": dept_pct
+            })
+        dept_breakdown.sort(key=lambda x: x["compliance_pct"])
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "total_with_sla": total_sla,
+                "met": met,
+                "breached": breached,
+                "compliance_pct": compliance_pct,
+                "by_department": dept_breakdown
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500

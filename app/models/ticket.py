@@ -39,6 +39,7 @@ class Ticket(db.Model):
     # Workflow Timestamps
     approved_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     approved_at = db.Column(db.DateTime, nullable=True)
+    assigned_at = db.Column(db.DateTime, nullable=True)
     accepted_at = db.Column(db.DateTime, nullable=True)
     resolved_at = db.Column(db.DateTime, nullable=True)
     closed_at = db.Column(db.DateTime, nullable=True)
@@ -100,6 +101,7 @@ class Ticket(db.Model):
             "created_at": format_datetime(self.created_at),
             "updated_at": format_datetime(self.updated_at),
             "approved_at": format_datetime(self.approved_at),
+            "assigned_at": format_datetime(self.assigned_at),
             "accepted_at": format_datetime(self.accepted_at),
             "resolved_at": format_datetime(self.resolved_at),
             "closed_at": format_datetime(self.closed_at)

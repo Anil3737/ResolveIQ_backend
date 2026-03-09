@@ -7,6 +7,8 @@ class Team(db.Model):
     id = db.Column(db.Integer, primary_key=True, index=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
     description = db.Column(db.String(255), nullable=True)
+    goal = db.Column(db.Text, nullable=True)
+    issue_type = db.Column(db.String(100), nullable=True)
     department_id = db.Column(db.Integer, db.ForeignKey("departments.id"), nullable=True)
     team_lead_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
 

@@ -10,6 +10,7 @@ from app.services.auth_service import AuthService
 from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.extensions import db
+from app.utils.logging_utils import log_activity
 import re
 import random
 import string
@@ -40,12 +41,95 @@ def check_id_exists():
 @admin_bp.route('/users', methods=['GET'])
 @roles_required('ADMIN')
 def get_users():
-    role_filter = request.args.get('role')  # e.g., ?role=EMPLOYEE
+    role_filter = request.args.get('role')
+    query = User.query
+    
     if role_filter:
-        users = User.query.join(User.role).filter(Role.name == role_filter.upper()).all()
-    else:
-        users = User.query.all()
-    return jsonify({"success": True, "data": [u.to_dict() for u in users]}), 200
+        query = query.join(User.role).filter(Role.name == role_filter.upper())
+    
+    users = query.all()
+    # Explicitly include department and role info
+    return jsonify({
+        "success": True, 
+        "data": [u.to_dict() for u in users]
+    }), 200
+
+@admin_bp.route('/users/<int:user_id>', methods=['PUT'])
+@roles_required('ADMIN')
+def update_user(user_id):
+    try:
+        user = User.query.get_or_404(user_id)
+        data = request.get_json()
+        
+        full_name = data.get('full_name', '').strip()
+        email = data.get('email', '').strip()
+        emp_id = data.get('emp_id', '').strip() #phone
+        role_name = data.get('role', '').upper()
+        department_id = data.get('department_id')
+
+        if full_name: user.full_name = full_name
+        if email: user.email = email
+        if emp_id: user.phone = emp_id
+        if department_id: user.department_id = department_id
+
+        if role_name:
+            new_role = Role.query.filter_by(name=role_name).first()
+            if new_role:
+                user.role_id = new_role.id
+
+        db.session.commit()
+        
+        log_activity(
+            user_id=current_user.id,
+            action_type="UPDATE",
+            entity_type="USER",
+            entity_id=user.id,
+            description=f"Admin updated user: {user.full_name} ({role_name})"
+        )
+        
+        return jsonify({"success": True, "message": "User updated successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@admin_bp.route('/users/<int:user_id>', methods=['DELETE'])
+@roles_required('ADMIN')
+def delete_user(user_id):
+    try:
+        if user_id == current_user.id:
+            return jsonify({"success": False, "message": "Cannot delete your own account"}), 400
+
+        user = User.query.get_or_404(user_id)
+        
+        # Check for active dependencies
+        from app.models.ticket import Ticket
+        assigned_tickets = Ticket.query.filter(
+            db.or_(Ticket.assigned_to == user_id, Ticket.created_by == user_id),
+            Ticket.status.notin_(['RESOLVED', 'CLOSED'])
+        ).first()
+
+        if assigned_tickets:
+            return jsonify({
+                "success": False, 
+                "message": "Cannot delete user with active/assigned tickets. Re-assign them first."
+            }), 400
+
+        user_name = user.full_name
+        db.session.delete(user)
+        db.session.commit()
+        
+        log_activity(
+            user_id=current_user.id,
+            action_type="DELETE",
+            entity_type="USER",
+            entity_id=user_id,
+            description=f"Admin deleted user: {user_name}"
+        )
+        
+        return jsonify({"success": True, "message": "User deleted successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/teams', methods=['GET'])
 @roles_required('ADMIN')
@@ -54,10 +138,11 @@ def get_teams():
         from sqlalchemy import text
         with db.engine.connect() as conn:
             rows = conn.execute(text("""
-                SELECT t.id, t.name, t.description, 
+                SELECT t.id, t.name, t.description, t.goal, t.issue_type,
                        d.name AS department_name,
                        u.full_name AS team_lead_name,
-                       t.created_at
+                       t.created_at,
+                       (SELECT COUNT(*) FROM team_members tm WHERE tm.team_id = t.id) AS member_count
                 FROM teams t
                 LEFT JOIN departments d ON t.department_id = d.id
                 LEFT JOIN users u ON t.team_lead_id = u.id
@@ -69,8 +154,11 @@ def get_teams():
                     "id": row["id"],
                     "name": row["name"],
                     "description": row["description"] or "",
+                    "goal": row["goal"] or "",
+                    "issue_type": row["issue_type"] or "",
                     "department": row["department_name"] or "N/A",
                     "team_lead": row["team_lead_name"] or "Unassigned",
+                    "member_count": row["member_count"] or 0,
                     "created_at": str(row["created_at"]) if row["created_at"] else ""
                 })
         return jsonify({"success": True, "data": teams}), 200
@@ -88,6 +176,8 @@ def create_team():
 
         name = data.get('name', '').strip()
         description = data.get('description', '').strip()
+        goal = data.get('goal', '').strip()
+        issue_type = data.get('issue_type', '').strip()
         department_id = data.get('department_id')
         team_lead_id = data.get('team_lead_id')
         agent_ids = data.get('agent_ids', []) # List of user IDs
@@ -102,6 +192,8 @@ def create_team():
         new_team = Team(
             name=name,
             description=description,
+            goal=goal,
+            issue_type=issue_type,
             department_id=department_id,
             team_lead_id=team_lead_id
         )
@@ -128,17 +220,13 @@ def create_team():
         else:
             print("No agent_ids provided in request")
 
-        try:
-            log = SystemActivityLog(
-                user_id=current_user.id,
-                action_type="CREATE",
-                entity_type="TEAM",
-                entity_id=new_team.id,
-                description=f"Admin created team: {name}"
-            )
-            db.session.add(log)
-        except Exception as e:
-            print(f"ACTIVITY LOG ERROR: {e}")
+        log_activity(
+            user_id=current_user.id,
+            action_type="CREATE",
+            entity_type="TEAM",
+            entity_id=new_team.id,
+            description=f"Admin created team: {name}"
+        )
 
         db.session.commit()
         
@@ -148,7 +236,9 @@ def create_team():
             "data": {
                 "id": new_team.id,
                 "name": new_team.name,
-                "description": new_team.description
+                "description": new_team.description,
+                "goal": new_team.goal,
+                "issue_type": new_team.issue_type
             }
         }), 201
 
@@ -157,16 +247,43 @@ def create_team():
         print(f"ERROR in create_team: {str(e)}")
         return jsonify({"success": False, "message": str(e)}), 500
 
+@admin_bp.route('/teams/<int:team_id>', methods=['GET'])
+@roles_required('ADMIN')
+def get_team_detail(team_id):
+    try:
+        team = Team.query.get_or_404(team_id)
+        from app.models.department import Department
+        dept = Department.query.get(team.department_id) if team.department_id else None
+        lead = User.query.get(team.team_lead_id) if team.team_lead_id else None
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "id": team.id,
+                "name": team.name,
+                "description": team.description or "",
+                "goal": team.goal or "",
+                "issue_type": team.issue_type or "",
+                "department_id": team.department_id,
+                "department_name": dept.name if dept else "N/A",
+                "team_lead_id": team.team_lead_id,
+                "team_lead_name": lead.full_name if lead else "Unassigned",
+                "created_at": str(team.created_at)
+            }
+        }), 200
+    except Exception as e:
+        print(f"Error fetching team detail: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
 @admin_bp.route('/teams/<int:team_id>/members', methods=['GET'])
 @roles_required('ADMIN')
 def get_admin_team_members(team_id):
     try:
-        # Fetch agents purely by team association
+        # Fetch all users associated with this team via TeamMember table
         members = User.query.join(TeamMember, User.id == TeamMember.user_id)\
-                            .join(Role)\
-                            .filter(TeamMember.team_id == team_id, Role.name == "AGENT").all()
+                            .filter(TeamMember.team_id == team_id).all()
         
-        print(f"Found {len(members)} agents for team {team_id}")
+        print(f"Team {team_id}: Found {len(members)} members")
         
         return jsonify({
             "success": True,
@@ -187,6 +304,8 @@ def update_team(team_id):
 
         name = data.get('name', '').strip()
         description = data.get('description', '').strip()
+        goal = data.get('goal', '').strip()
+        issue_type = data.get('issue_type', '').strip()
         department_id = data.get('department_id')
         team_lead_id = data.get('team_lead_id')
         agent_ids = data.get('agent_ids', [])
@@ -220,6 +339,8 @@ def update_team(team_id):
         # 4. Update team details
         team.name = name
         team.description = description
+        team.goal = goal
+        team.issue_type = issue_type
         team.department_id = department_id
         team.team_lead_id = team_lead_id
 
@@ -235,18 +356,13 @@ def update_team(team_id):
                 agent_profile.team_lead_id = team_lead_id
                 agent_profile.department_id = department_id
         
-        # Log Activity
-        try:
-            log = SystemActivityLog(
-                user_id=current_user.id,
-                action_type="UPDATE",
-                entity_type="TEAM",
-                entity_id=team.id,
-                description=f"Admin updated team: {name}"
-            )
-            db.session.add(log)
-        except Exception as e:
-            print(f"ACTIVITY LOG ERROR: {e}")
+        log_activity(
+            user_id=current_user.id,
+            action_type="UPDATE",
+            entity_type="TEAM",
+            entity_id=team.id,
+            description=f"Admin updated team: {name}"
+        )
 
         db.session.commit()
         return jsonify({"success": True, "message": "Team updated successfully"}), 200
@@ -277,17 +393,13 @@ def delete_team(team_id):
         db.session.delete(team)
 
         # Log Activity
-        try:
-            log = SystemActivityLog(
-                user_id=current_user.id,
-                action_type="DELETE",
-                entity_type="TEAM",
-                entity_id=team_id,
-                description=f"Admin deleted team: {team_name}"
-            )
-            db.session.add(log)
-        except Exception as e:
-            print(f"ACTIVITY LOG ERROR: {e}")
+        log_activity(
+            user_id=current_user.id,
+            action_type="DELETE",
+            entity_type="TEAM",
+            entity_id=team_id,
+            description=f"Admin deleted team: {team_name}"
+        )
 
         db.session.commit()
         return jsonify({"success": True, "message": f"Team '{team_name}' deleted successfully"}), 200
@@ -311,13 +423,91 @@ def handle_departments():
         if user_role != 'ADMIN':
             return jsonify({"success": False, "message": "Admin only"}), 403
         data = request.get_json()
-        dept = Department(name=data.get('name'))
+        dept = Department(
+            name=data.get('name'),
+            description=data.get('description', '')
+        )
         db.session.add(dept)
         db.session.commit()
+        
+        log_activity(
+            user_id=current_user.id,
+            action_type="CREATE",
+            entity_type="DEPARTMENT",
+            entity_id=dept.id,
+            description=f"Admin created department: {dept.name}"
+        )
+        
         return jsonify({"success": True, "data": dept.to_dict()}), 201
     
-    depts = Department.query.all()
-    return jsonify({"success": True, "data": [d.to_dict() for d in depts]}), 200
+    from sqlalchemy import text
+    with db.engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT d.id, d.name, d.description, d.created_at,
+                   (SELECT COUNT(*) FROM teams t WHERE t.department_id = d.id) AS team_count,
+                   (SELECT COUNT(*) FROM tickets tk WHERE tk.department_id = d.id) AS ticket_count
+            FROM departments d
+            ORDER BY d.name ASC
+        """)).mappings().all()
+        
+        departments = []
+        for row in rows:
+            departments.append({
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"] or "",
+                "created_at": str(row["created_at"]) if row["created_at"] else "",
+                "team_count": row["team_count"] or 0,
+                "ticket_count": row["ticket_count"] or 0
+            })
+            
+    return jsonify({"success": True, "data": departments}), 200
+
+@admin_bp.route('/departments/<int:dept_id>', methods=['PUT', 'DELETE'])
+@roles_required('ADMIN')
+def manage_department(dept_id):
+    dept = Department.query.get_or_404(dept_id)
+    
+    if request.method == 'PUT':
+        data = request.get_json()
+        dept.name = data.get('name', dept.name)
+        dept.description = data.get('description', dept.description)
+        db.session.commit()
+        
+        log_activity(
+            user_id=current_user.id,
+            action_type="UPDATE",
+            entity_type="DEPARTMENT",
+            entity_id=dept.id,
+            description=f"Admin updated department: {dept.name}"
+        )
+        
+        return jsonify({"success": True, "data": dept.to_dict()}), 200
+        
+    if request.method == 'DELETE':
+        # Check if department has associated teams or tickets
+        team_exists = Team.query.filter_by(department_id=dept_id).first()
+        ticket_exists = Ticket.query.filter_by(department_id=dept_id).first()
+        
+        if team_exists or ticket_exists:
+            return jsonify({
+                "success": False, 
+                "message": "Cannot delete department with associated teams or tickets."
+            }), 400
+            
+        dept_name = dept.name
+        db.session.delete(dept)
+        db.session.commit()
+        
+        log_activity(
+            user_id=current_user.id,
+            action_type="DELETE",
+            entity_type="DEPARTMENT",
+            entity_id=dept_id,
+            description=f"Admin deleted department: {dept_name}"
+        )
+        
+        return jsonify({"success": True, "message": "Department deleted successfully"}), 200
 
 @admin_bp.route('/create-staff', methods=['POST'])
 @roles_required('ADMIN')
@@ -604,11 +794,9 @@ def get_dashboard_metrics():
         # 1. Total Tickets
         total_tickets = Ticket.query.count()
         
-        # 2. High Risk Count (ai_score >= 70 AND status != CLOSED)
-        high_risk_count = Ticket.query.filter(
-            Ticket.ai_score >= 70,
-            Ticket.status != "CLOSED"
-        ).count()
+        # 2. High Risk Count (ai_score >= 70)
+        # Matches the 'critical' + 'high' distribution logic
+        high_risk_count = Ticket.query.filter(Ticket.ai_score >= 70).count()
         
         # 3. SLA Breached Count (deadline passed AND not RESOLVED/CLOSED)
         sla_breached_count = Ticket.query.filter(
@@ -616,9 +804,12 @@ def get_dashboard_metrics():
             Ticket.status.notin_(["RESOLVED", "CLOSED"])
         ).count()
         
-        # 4. Escalated Count
-        escalated_count = Ticket.query.filter_by(
-            escalation_required=True
+        # 4. Escalated Count (escalation_required OR status == 'ESCALATED')
+        escalated_count = Ticket.query.filter(
+            db.or_(
+                Ticket.escalation_required == True,
+                Ticket.status == 'ESCALATED'
+            )
         ).count()
         
         # 5. Risk Distribution (Categorize by ai_score)

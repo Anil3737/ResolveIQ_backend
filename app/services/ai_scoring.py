@@ -8,7 +8,7 @@ class AIScoringService:
     MEDIUM = ['help', 'request', 'install', 'update', 'access', 'setup']
 
     @staticmethod
-    def compute_scoring(title, description):
+    def compute_scoring(title, description, department_id=None):
         text = (title + " " + description).lower()
         
         # 1. Base AI Score (0-100)
@@ -47,11 +47,18 @@ class AIScoringService:
         # P1 and P2 require escalation
         escalation_required = 1 if priority in ['P1', 'P2'] else 0
         
-        # 5. SLA Calculation
+        # 5. SLA Calculation (Dynamic Lookup)
+        from app.models.sla_rule import SLARule
+        
         sla_hours = 24  # Default for P4
         if priority == 'P1': sla_hours = 4
         elif priority == 'P2': sla_hours = 8
         elif priority == 'P3': sla_hours = 16
+
+        if department_id:
+            rule = SLARule.query.filter_by(department_id=department_id, priority=priority).first()
+            if rule:
+                sla_hours = rule.sla_hours
         
         sla_deadline = datetime.utcnow() + timedelta(hours=sla_hours)
         

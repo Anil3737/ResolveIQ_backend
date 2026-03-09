@@ -101,3 +101,27 @@ def change_password():
     except Exception as e:
         print(f"❌ CHANGE PASSWORD ERROR: {str(e)}")
         return jsonify({"success": False, "message": "Server error"}), 500
+
+@auth_bp.route('/update-profile', methods=['PUT'])
+@jwt_required()
+def update_profile():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "No data provided"}), 400
+        
+        from app.services.auth_service import AuthService
+        success, message = AuthService.update_profile(current_user.id, data)
+        
+        if success:
+            return jsonify({
+                "success": True, 
+                "message": message,
+                "data": current_user.to_dict() # Return updated user data
+            }), 200
+        else:
+            return jsonify({"success": False, "message": message}), 400
+            
+    except Exception as e:
+        print(f"❌ UPDATE PROFILE ERROR: {str(e)}")
+        return jsonify({"success": False, "message": "Server error"}), 500

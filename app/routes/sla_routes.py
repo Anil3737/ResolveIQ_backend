@@ -20,8 +20,16 @@ def create_rule():
 @sla_bp.route('/rules', methods=['GET'])
 @roles_required('ADMIN', 'TEAM_LEAD')
 def get_rules():
-    rules = SLARule.query.all()
-    return jsonify({"success": True, "data": [r.to_dict() for r in rules]}), 200
+    from app.models.department import Department
+    rules = db.session.query(SLARule, Department.name).join(Department, SLARule.department_id == Department.id).all()
+    
+    data = []
+    for rule, dept_name in rules:
+        d = rule.to_dict()
+        d['department_name'] = dept_name
+        data.append(d)
+        
+    return jsonify({"success": True, "data": data}), 200
 
 @sla_bp.route('/rules/<int:id>', methods=['PUT'])
 @roles_required('ADMIN')

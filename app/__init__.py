@@ -20,6 +20,7 @@ def create_app(config_class=Config):
     from app.routes.analytics_routes import analytics_bp
     from app.routes.team_lead_routes import team_lead_bp
     from app.routes.agent_routes import agent_bp
+    from app.routes.activity_routes import activity_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
@@ -29,6 +30,7 @@ def create_app(config_class=Config):
     app.register_blueprint(analytics_bp, url_prefix='/api/analytics')
     app.register_blueprint(team_lead_bp, url_prefix='/api/team-lead')
     app.register_blueprint(agent_bp, url_prefix='/api/agent')
+    app.register_blueprint(activity_bp, url_prefix='/api')
     
     # Initialize background scheduler
     from app.scheduler import init_scheduler

@@ -22,8 +22,10 @@ def create_app():
     
     from app.routes.team_lead_routes import team_lead_bp
     from app.routes.agent_routes import agent_bp
+    from app.routes.activity_routes import activity_bp
     app.register_blueprint(team_lead_bp, url_prefix="/api/team-lead")
     app.register_blueprint(agent_bp, url_prefix="/api/agent")
+    app.register_blueprint(activity_bp, url_prefix="/api")
 
     @app.teardown_appcontext
     def shutdown_session(exception=None):

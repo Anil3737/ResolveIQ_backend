@@ -175,3 +175,43 @@ class AuthService:
             db.session.rollback()
             print(f"Error during password change: {str(e)}")
             return False, str(e)
+
+    @staticmethod
+    def update_profile(user_id, data):
+        """
+        Updates basic profile information for a user.
+        """
+        try:
+            user = User.query.get(user_id)
+            if not user:
+                return False, "User not found"
+            
+            full_name = data.get('full_name')
+            phone = data.get('phone')
+            
+            if full_name:
+                user.full_name = full_name
+            if phone:
+                # Check if phone is already taken by another user
+                existing = User.query.filter(User.phone == phone, User.id != user_id).first()
+                if existing:
+                    return False, f"Phone/EMP ID {phone} is already in use"
+                user.phone = phone
+                
+            user.updated_at = db.func.now()
+            
+            log_activity(
+                user_id=user_id,
+                action_type="PROFILE_UPDATED",
+                entity_type="USER",
+                entity_id=user_id,
+                description=f"User {user.full_name} updated their profile info"
+            )
+            
+            db.session.commit()
+            return True, "Profile updated successfully"
+            
+        except Exception as e:
+            db.session.rollback()
+            print(f"Error during profile update: {str(e)}")
+            return False, str(e)

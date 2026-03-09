@@ -48,7 +48,7 @@ class TicketService:
 
                 # 1. AI Analysis
                 risk_result = RiskEngine.calculate(title, description)
-                ai_meta = AIScoringService.compute_scoring(title, description)
+                ai_meta = AIScoringService.compute_scoring(title, description, department_id=department_id)
                 
                 score = risk_result['score']
                 breach_risk = risk_result['risk']
@@ -117,6 +117,9 @@ class TicketService:
     def assign_ticket(ticket_id, agent_id, lead_id):
         ticket = Ticket.query.get_or_404(ticket_id)
         ticket.assigned_to = agent_id
+        ticket.assigned_at = datetime.utcnow()
+        if not ticket.approved_at:
+            ticket.approved_at = datetime.utcnow()
         ticket.status = 'IN_PROGRESS'
         
         # Log Activity
@@ -211,3 +214,26 @@ class TicketService:
         except Exception as e:
             db.session.rollback()
             raise e
+    @staticmethod
+    def resolve_escalation(ticket_id, user_id):
+        """
+        Clears escalation flags from a ticket.
+        """
+        ticket = Ticket.query.get_or_404(ticket_id)
+        ticket.escalation_required = False
+        if ticket.status == 'ESCALATED':
+            # Revert to OPEN or APPROVED if it was manually escalated
+            # logic: if it has an approver, it's APPROVED, else OPEN
+            ticket.status = 'APPROVED' if ticket.approved_at else 'OPEN'
+            
+        description = f"Escalation resolved by Admin {user_id}"
+        log_activity(
+            user_id=user_id,
+            action_type="ESCALATION_RESOLVED",
+            entity_type="TICKET",
+            entity_id=ticket.id,
+            description=description
+        )
+        AuditService.log_action(description, user_id, ticket.id)
+        db.session.commit()
+        return ticket

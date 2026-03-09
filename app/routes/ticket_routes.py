@@ -65,7 +65,22 @@ def get_tickets():
 
     elif user_role == 'ADMIN':
         # Admin unrestricted — sees all tickets globally
-        query = Ticket.query.order_by(Ticket.created_at.desc())
+        dept_id_filter = request.args.get('department_id', type=int)
+        escalated_filter = request.args.get('escalated', 'false').lower() == 'true'
+        
+        query = Ticket.query
+        if dept_id_filter:
+            query = query.filter(Ticket.department_id == dept_id_filter)
+        
+        if escalated_filter:
+            query = query.filter(
+                db.or_(
+                    Ticket.escalation_required == True,
+                    Ticket.status == 'ESCALATED'
+                )
+            )
+            
+        query = query.order_by(Ticket.created_at.desc())
         if limit:
             query = query.limit(limit)
         tickets = query.all()
@@ -91,11 +106,11 @@ def _build_progress(ticket):
         "timestamp": ticket.approved_at.isoformat() + "+00:00" if ticket.approved_at else None
     }
 
-    # 3. Assigned (In this model, Accepting implies Assignment)
-    is_assigned = ticket.assigned_to is not None
+    # 3. Assigned
+    is_assigned = (ticket.assigned_to is not None) or (ticket.assigned_at is not None)
     progress["assigned"] = {
         "status": is_assigned,
-        "timestamp": ticket.accepted_at.isoformat() + "+00:00" if ticket.accepted_at else None
+        "timestamp": ticket.assigned_at.isoformat() + "+00:00" if ticket.assigned_at else None
     }
 
     # 4. Accepted
@@ -227,10 +242,30 @@ def update_ticket_status():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
+@ticket_bp.route('/<int:id>/resolve-escalation', methods=['POST'])
+@roles_required('ADMIN')
+def resolve_escalation(id):
+    """
+    Clears the escalation flag for a ticket.
+    """
+    ticket = TicketService.resolve_escalation(id, current_user.id)
+    return jsonify({"success": True, "data": ticket.to_dict(role="ADMIN")}), 200
+
 @ticket_bp.route('/<int:id>', methods=['DELETE'])
 @roles_required('ADMIN')
 def delete_ticket(id):
     ticket = Ticket.query.get_or_404(id)
+    ticket_num = ticket.ticket_number
     db.session.delete(ticket)
+    
+    from app.utils.logging_utils import log_activity
+    log_activity(
+        user_id=current_user.id,
+        action_type="TICKET_DELETED",
+        entity_type="TICKET",
+        entity_id=id,
+        description=f"Admin deleted ticket {ticket_num}"
+    )
+    
     db.session.commit()
     return jsonify({"success": True, "message": "Ticket deleted"}), 200
