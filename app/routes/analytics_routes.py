@@ -244,3 +244,55 @@ def sla_compliance():
         }), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ─────────────────────────────────────────────
+# 6. Feedback Summary
+# ─────────────────────────────────────────────
+@analytics_bp.route('/feedback-summary', methods=['GET'])
+@jwt_required()
+def get_feedback_summary():
+    """Total feedback count, average rating and distribution per star."""
+    try:
+        from app.models.feedback import Feedback
+        feedbacks = Feedback.query.all()
+        total = len(feedbacks)
+
+        if total == 0:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "total_feedbacks": 0,
+                    "avg_rating": 0.0,
+                    "rating_distribution": {"1": 0, "2": 0, "3": 0, "4": 0, "5": 0},
+                    "top_suggestions": {}
+                }
+            }), 200
+
+        avg_rating = round(sum(f.rating for f in feedbacks) / total, 2)
+
+        rating_distribution = {str(i): 0 for i in range(1, 6)}
+        for f in feedbacks:
+            key = str(max(1, min(5, f.rating)))
+            rating_distribution[key] = rating_distribution.get(key, 0) + 1
+
+        suggestion_counts = {}
+        for f in feedbacks:
+            if f.suggestions:
+                for s in f.suggestions:
+                    suggestion_counts[s] = suggestion_counts.get(s, 0) + 1
+
+        # Return top 5 suggestions
+        top_suggestions = dict(sorted(suggestion_counts.items(), key=lambda x: x[1], reverse=True)[:5])
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "total_feedbacks": total,
+                "avg_rating": avg_rating,
+                "rating_distribution": rating_distribution,
+                "top_suggestions": top_suggestions
+            }
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
