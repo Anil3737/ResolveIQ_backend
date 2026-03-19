@@ -11,8 +11,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     full_name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    # emp_id is mapped to the physical 'phone' column for semantic clarity
-    emp_id = db.Column('phone', db.String(20), unique=True, nullable=True)
+    emp_id = db.Column(db.String(20), unique=True, nullable=True) # Physical column is now 'emp_id'
 
     @property
     def phone(self):

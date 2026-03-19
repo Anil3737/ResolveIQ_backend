@@ -59,7 +59,7 @@ CREATE TABLE `users` (
     `id` INT NOT NULL AUTO_INCREMENT,
     `full_name` VARCHAR(100) NOT NULL,
     `email` VARCHAR(120) NOT NULL,
-    `phone` VARCHAR(20) DEFAULT NULL,
+    `emp_id` VARCHAR(20) DEFAULT NULL,
     `password_hash` VARCHAR(255) NOT NULL,
     `role_id` INT NOT NULL,
     `is_active` TINYINT(1) DEFAULT 1,
@@ -68,7 +68,7 @@ CREATE TABLE `users` (
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uq_users_email` (`email`),
-    UNIQUE KEY `uq_users_phone` (`phone`),
+    UNIQUE KEY `uq_users_emp_id` (`emp_id`),
     CONSTRAINT `fk_users_role` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -333,7 +333,7 @@ INSERT INTO `departments` (`id`, `name`, `description`) VALUES (1, 'IT Support',
 
 -- Initial Admin (admin@resolveiq.com / Admin@123)
 -- Hash generated via app/utils/password_utils.py (bcrypt)
-INSERT INTO `users` (`id`, `full_name`, `email`, `phone`, `password_hash`, `role_id`, `is_active`) 
+INSERT INTO `users` (`id`, `full_name`, `email`, `emp_id`, `password_hash`, `role_id`, `is_active`) 
 VALUES (1, 'System Admin', 'admin@resolveiq.com', '1111111111', '$2b$12$K7O8wXWz6Q6.gWlqZ...PLACEHOLDER', 1, 1);
 
 -- =============================================================
