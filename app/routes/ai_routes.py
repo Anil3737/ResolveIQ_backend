@@ -1,10 +1,12 @@
 from flask import Blueprint, request, jsonify
+from flask_jwt_extended import jwt_required
 from app.services.ai_service import AIService
 from app.utils.decorators import roles_required
 
 ai_bp = Blueprint('ai', __name__)
 
 @ai_bp.route('/predict', methods=['POST'])
+@jwt_required()
 def predict():
     data = request.get_json()
     result = AIService.calculate_score(data.get('title'), data.get('description'))

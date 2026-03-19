@@ -4,7 +4,10 @@ from app.models.system_activity_log import SystemActivityLog
 from app.models.user import User, AgentProfile, TeamLeadProfile
 from app.utils.decorators import roles_required
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 activity_bp = Blueprint('activity', __name__)
 

@@ -1,5 +1,5 @@
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
 
 class Feedback(db.Model):
     __tablename__ = 'feedback'
@@ -10,7 +10,7 @@ class Feedback(db.Model):
     rating = db.Column(db.Integer, nullable=False)
     comments = db.Column(db.Text, nullable=True)
     suggestions = db.Column(db.JSON, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     ticket = db.relationship('Ticket', backref=db.backref('feedbacks', lazy=True))

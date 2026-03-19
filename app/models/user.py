@@ -1,6 +1,9 @@
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
 from app.utils.password_utils import hash_password, verify_password
+import logging
+
+logger = logging.getLogger(__name__)
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -8,14 +11,23 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     full_name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    # phone is used as EMP ID according to requirements
-    phone = db.Column(db.String(20), unique=True, nullable=True)
+    # emp_id is mapped to the physical 'phone' column for semantic clarity
+    emp_id = db.Column('phone', db.String(20), unique=True, nullable=True)
+
+    @property
+    def phone(self):
+        """Alias for emp_id to maintain backward compatibility"""
+        return self.emp_id
+
+    @phone.setter
+    def phone(self, value):
+        self.emp_id = value
     password_hash = db.Column(db.String(255), nullable=False)
-    role_id = db.Column(db.Integer, db.ForeignKey('roles.id'), nullable=False, default=4) # 4 = EMPLOYEE
+    role_id = db.Column(db.Integer, db.ForeignKey('roles.id'), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     require_password_change = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     role = db.relationship('Role', backref=db.backref('users', lazy=True))
@@ -32,7 +44,7 @@ class User(db.Model):
             self.password_hash = hash_password(password)
             db.session.add(self)
             db.session.flush()  # Don't commit — let the caller control the transaction
-            print(f"✅ Upgraded hash to bcrypt for: {self.email}")
+            logger.info(f"✅ Upgraded hash to bcrypt for: {self.email}")
             
         return is_valid
 
@@ -41,7 +53,8 @@ class User(db.Model):
             "id": self.id,
             "full_name": self.full_name,
             "email": self.email,
-            "phone": self.phone,
+            "emp_id": self.emp_id,
+            "phone": self.emp_id, # Keep for backward compatibility
             "role": self.role.name if self.role else "EMPLOYEE",
             "role_id": self.role_id,
             "require_password_change": self.require_password_change
@@ -78,7 +91,7 @@ class TeamLeadProfile(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, nullable=False)
     department_id = db.Column(db.Integer, db.ForeignKey('departments.id'), nullable=False)
     location = db.Column(db.String(100), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = db.relationship('User', backref=db.backref('team_lead_profile', uselist=False))
@@ -92,7 +105,7 @@ class AgentProfile(db.Model):
     department_id = db.Column(db.Integer, db.ForeignKey('departments.id'), nullable=False)
     team_lead_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True) # References users.id (must be a TEAM_LEAD)
     location = db.Column(db.String(100), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = db.relationship('User', foreign_keys=[user_id], backref=db.backref('agent_profile', uselist=False))
@@ -105,7 +118,7 @@ class EmployeeProfile(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, nullable=False)
     location = db.Column(db.String(100), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = db.relationship('User', backref=db.backref('employee_profile', uselist=False))

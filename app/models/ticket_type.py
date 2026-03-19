@@ -1,18 +1,13 @@
-# app/models/ticket_type.py
+from app.extensions import db
+from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, DateTime
-from sqlalchemy.sql import func
-
-from app.database import Base
-
-
-class TicketType(Base):
+class TicketType(db.Model):
     __tablename__ = "ticket_types"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = db.Column(db.Integer, primary_key=True, index=True)
 
-    name = Column(String(100), unique=True, nullable=False)
-    severity_level = Column(Integer, nullable=False, default=1)  
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    severity_level = db.Column(db.Integer, nullable=False, default=1)  
     # 1=Low, 2=Medium, 3=High, 4=Critical
 
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)

@@ -13,7 +13,7 @@ class AuditLog(db.Model):
     action = db.Column(db.String(255), nullable=False)
     performed_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id'), nullable=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
         return {

@@ -15,7 +15,7 @@ class SystemActivityLog(db.Model):
     entity_type = db.Column(db.String(50), nullable=False)
     entity_id = db.Column(db.Integer, nullable=True)
     description = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     user = db.relationship('User', backref=db.backref('activity_logs', lazy=True))

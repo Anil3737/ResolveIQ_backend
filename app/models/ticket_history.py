@@ -1,19 +1,17 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
-from sqlalchemy.sql import func
-from app.database import Base
+from app.extensions import db
+from datetime import datetime
 
-
-class TicketHistory(Base):
+class TicketHistory(db.Model):
     __tablename__ = "ticket_history"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = db.Column(db.Integer, primary_key=True, index=True)
 
-    ticket_id = Column(Integer, ForeignKey("tickets.id"), nullable=False)
+    ticket_id = db.Column(db.Integer, db.ForeignKey("tickets.id"), nullable=False)
 
-    action = Column(String(120), nullable=False)
-    old_value = Column(Text, nullable=True)
-    new_value = Column(Text, nullable=True)
+    action = db.Column(db.String(120), nullable=False)
+    old_value = db.Column(db.Text, nullable=True)
+    new_value = db.Column(db.Text, nullable=True)
 
-    performed_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    performed_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
 
-    performed_at = Column(DateTime(timezone=True), server_default=func.now())
+    performed_at = db.Column(db.DateTime, default=datetime.utcnow)

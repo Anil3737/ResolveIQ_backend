@@ -4,7 +4,10 @@ from app.models.ticket import Ticket
 from app.models.user import User
 from app.extensions import db
 from sqlalchemy import func, case
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+import logging
+logger = logging.getLogger(__name__)
 
 analytics_bp = Blueprint('analytics', __name__)
 
@@ -106,13 +109,13 @@ def tickets_trend():
         days = min(max(days, 7), 90)  # clamp 7–90
         base_query, _ = _base_query()
 
-        start = datetime.utcnow() - timedelta(days=days)
+        start = datetime.now(timezone.utc) - timedelta(days=days)
         rows = (
             db.session.query(
                 func.date(Ticket.created_at).label('day'),
                 func.count(Ticket.id).label('count')
             )
-            .filter(Ticket.created_at >= start)
+            .filter(Ticket.created_at.isnot(None))
             .filter(Ticket.id.in_([t.id for t in base_query.with_entities(Ticket.id).all()]))
             .group_by(func.date(Ticket.created_at))
             .order_by(func.date(Ticket.created_at))
@@ -160,17 +163,18 @@ def agent_performance():
             # Average resolution time in hours
             avg_hours = None
             if resolved_count > 0:
-                total_seconds = sum(
-                    (t.resolved_at - t.created_at).total_seconds()
-                    for t in resolved_tickets
-                    if t.resolved_at and t.created_at
-                )
+                total_seconds = 0
+                for t in resolved_tickets:
+                    if t.resolved_at and t.created_at:
+                        r_at = t.resolved_at.replace(tzinfo=timezone.utc) if t.resolved_at.tzinfo is None else t.resolved_at
+                        c_at = t.created_at.replace(tzinfo=timezone.utc) if t.created_at.tzinfo is None else t.created_at
+                        total_seconds += (r_at - c_at).total_seconds()
                 avg_hours = round(total_seconds / 3600 / resolved_count, 1)
 
             resolution_rate = round((resolved_count / assigned) * 100, 1) if assigned else 0
             result.append({
                 "agent": agent.full_name,
-                "emp_id": agent.phone or "",
+                "emp_id": agent.emp_id or "",
                 "assigned": assigned,
                 "resolved": resolved_count,
                 "resolution_rate": resolution_rate,
@@ -191,7 +195,7 @@ def agent_performance():
 def sla_compliance():
     """Global SLA compliance % + per-department breakdown."""
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         base_query, _ = _base_query()
         ticket_ids = [t.id for t in base_query.with_entities(Ticket.id).all()]
 
@@ -202,10 +206,12 @@ def sla_compliance():
         ).all()
 
         total_sla = len(sla_tickets)
-        breached = sum(
-            1 for t in sla_tickets
-            if t.sla_deadline < now and t.status not in ['RESOLVED', 'CLOSED']
-        )
+        breached = 0
+        for t in sla_tickets:
+            sla_d = t.sla_deadline.replace(tzinfo=timezone.utc) if t.sla_deadline.tzinfo is None else t.sla_deadline
+            if sla_d < now and t.status not in ['RESOLVED', 'CLOSED']:
+                breached += 1
+        
         met = total_sla - breached
         compliance_pct = round((met / total_sla) * 100, 1) if total_sla else 100.0
 
@@ -217,10 +223,11 @@ def sla_compliance():
             dept_tickets = [t for t in sla_tickets if t.department_id == dept.id]
             if not dept_tickets:
                 continue
-            dept_breached = sum(
-                1 for t in dept_tickets
-                if t.sla_deadline < now and t.status not in ['RESOLVED', 'CLOSED']
-            )
+            dept_breached = 0
+            for t in dept_tickets:
+                sla_d = t.sla_deadline.replace(tzinfo=timezone.utc) if t.sla_deadline.tzinfo is None else t.sla_deadline
+                if sla_d < now and t.status not in ['RESOLVED', 'CLOSED']:
+                    dept_breached += 1
             dept_met = len(dept_tickets) - dept_breached
             dept_pct = round((dept_met / len(dept_tickets)) * 100, 1)
             dept_breakdown.append({

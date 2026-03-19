@@ -17,7 +17,7 @@ class TicketAI(db.Model):
     similarity_risk = db.Column(db.Integer, default=0)
     sla_breach_risk = db.Column(db.Integer, default=0)
     explanation_json = db.Column(db.JSON, nullable=True)
-    analyzed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    analyzed_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
         return {

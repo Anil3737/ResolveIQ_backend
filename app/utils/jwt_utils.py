@@ -1,6 +1,6 @@
 # app/utils/jwt_utils.py
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 
 from app.config import settings
@@ -11,7 +11,7 @@ ALGORITHM = "HS256"
 def create_access_token(data: dict, expires_minutes: int | None = None) -> str:
     to_encode = data.copy()
 
-    expire = datetime.utcnow() + timedelta(
+    expire = datetime.now(timezone.utc) + timedelta(
         minutes=expires_minutes if expires_minutes else settings.JWT_EXPIRE_MINUTES
     )
 

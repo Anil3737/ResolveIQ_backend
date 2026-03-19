@@ -1,7 +1,7 @@
 # app/ai/ai_routes.py
 
 from flask import Blueprint, request, jsonify
-from datetime import datetime
+from datetime import datetime, timezone
 from flask_jwt_extended import jwt_required, current_user
 from app.models.ticket import Ticket
 from app.models.ticket_ai import TicketAI
@@ -52,7 +52,7 @@ def analyze_ticket(ticket_id):
         existing.similarity_risk = ai_result["similarity_risk"]
         existing.sla_breach_risk = ai_result["sla_breach_risk"]
         existing.explanation_json = ai_result["explanation_json"]
-        existing.analyzed_at = datetime.utcnow()
+        existing.analyzed_at = datetime.now(timezone.utc)
     else:
         ai_row = TicketAI(
             ticket_id=ticket.id,
@@ -62,7 +62,7 @@ def analyze_ticket(ticket_id):
             similarity_risk=ai_result["similarity_risk"],
             sla_breach_risk=ai_result["sla_breach_risk"],
             explanation_json=ai_result["explanation_json"],
-            analyzed_at=datetime.utcnow()
+            analyzed_at=datetime.now(timezone.utc)
         )
         db.session.add(ai_row)
 

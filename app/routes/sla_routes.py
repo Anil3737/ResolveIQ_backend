@@ -34,11 +34,18 @@ def get_rules():
 @sla_bp.route('/rules/<int:id>', methods=['PUT'])
 @roles_required('ADMIN')
 def update_rule(id):
-    rule = SLARule.query.get_or_404(id)
-    data = request.get_json()
-    rule.sla_hours = data.get('sla_hours')
-    db.session.commit()
-    return jsonify({"success": True, "data": rule.to_dict()}), 200
+    try:
+        rule = SLARule.query.get_or_404(id)
+        data = request.get_json()
+        sla_hours = data.get('sla_hours')
+        if not sla_hours or not isinstance(sla_hours, int) or sla_hours <= 0:
+            return jsonify({"success": False, "message": "sla_hours must be a positive integer"}), 400
+        rule.sla_hours = sla_hours
+        db.session.commit()
+        return jsonify({"success": True, "data": rule.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @sla_bp.route('/rules/<int:id>', methods=['DELETE'])
 @roles_required('ADMIN')

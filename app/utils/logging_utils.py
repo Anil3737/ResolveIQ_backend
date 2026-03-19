@@ -1,5 +1,8 @@
 from app.extensions import db
 from app.models.system_activity_log import SystemActivityLog
+import logging
+
+logger = logging.getLogger(__name__)
 
 def log_activity(user_id, action_type, entity_type, entity_id, description):
     """
@@ -18,4 +21,4 @@ def log_activity(user_id, action_type, entity_type, entity_id, description):
         db.session.add(log)
     except Exception as e:
         # We don't want logging to crash the main transaction, but we should know if it fails
-        print(f"⚠️ Activity Logging Error: {str(e)}")
+        logger.warning(f"⚠️ Activity Logging Error: {str(e)}")

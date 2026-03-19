@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import current_user
 from app.models.ticket import Ticket
@@ -8,7 +9,9 @@ from app.models.team_member import TeamMember
 from app.utils.decorators import roles_required
 from app.utils.dept_isolation import apply_dept_filter, assert_dept_access
 from app.extensions import db
-from datetime import datetime
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 team_lead_bp = Blueprint('team_lead', __name__)
 
@@ -23,11 +26,14 @@ def get_my_team_tickets():
         ticket.department_id == TL.department_id
         AND ticket.status == 'OPEN'
         AND ticket.assigned_to IS NULL
+        AND ticket.parent_ticket_id IS NULL  ← Child tickets are hidden; they appear
+                                               under the parent's "Related Reports" panel.
 
     Team Lead must NOT see:
         - Other department tickets
         - Already assigned tickets
         - Closed / Approved / In-Progress tickets (those are 'done' from TL perspective)
+        - Child tickets (informational only; bundled under the parent)
     """
     dept_id = (
         current_user.team_lead_profile.department_id
@@ -39,10 +45,56 @@ def get_my_team_tickets():
     tickets = Ticket.query.filter(
         Ticket.department_id == dept_id,
         Ticket.status == 'OPEN',
-        Ticket.assigned_to == None
+        Ticket.assigned_to == None,
+        Ticket.parent_ticket_id == None,    # ← Only show parent tickets, not children
     ).order_by(Ticket.created_at.asc()).all()
 
     return jsonify({"success": True, "data": [t.to_dict() for t in tickets]}), 200
+
+
+@team_lead_bp.route('/tickets/<int:ticket_id>/related-reports', methods=['GET'])
+@roles_required('TEAM_LEAD')
+def get_related_reports(ticket_id):
+    """
+    Returns all child tickets linked to a parent ticket.
+    Used by the Team Lead dashboard "Related Reports" panel.
+
+    Only shows children belonging to the Team Lead's department.
+    """
+    dept_id = (
+        current_user.team_lead_profile.department_id
+        if current_user.team_lead_profile else None
+    )
+    if not dept_id:
+        return jsonify({"success": False, "message": "Team Lead has no department assigned"}), 403
+
+    # Verify the parent ticket belongs to this TL's department
+    parent = Ticket.query.get_or_404(ticket_id)
+    if parent.department_id != dept_id:
+        return jsonify({"success": False, "message": "Access denied: ticket belongs to a different department"}), 403
+
+    children = Ticket.query.filter_by(parent_ticket_id=ticket_id).order_by(Ticket.created_at.asc()).all()
+
+    child_data = []
+    for child in children:
+        child_data.append({
+            "id": child.id,
+            "ticket_number": child.ticket_number,
+            "title": child.title,
+            "created_by": child.created_by,
+            "created_by_name": child.creator.full_name if child.creator else None,
+            "status": child.status,
+            "created_at": child.created_at.isoformat() + "+00:00" if child.created_at else None,
+            "location": child.location,
+        })
+
+    return jsonify({
+        "success": True,
+        "parent_ticket_number": parent.ticket_number,
+        "affected_users": len(child_data),
+        "data": child_data
+    }), 200
+
 
 @team_lead_bp.route('/approve-ticket', methods=['POST'])
 @roles_required('TEAM_LEAD')
@@ -71,8 +123,8 @@ def approve_ticket():
 
     ticket.status = 'APPROVED'
     ticket.approved_by = current_user.id
-    ticket.approved_at = datetime.utcnow()
-    ticket.updated_at = datetime.utcnow()
+    ticket.approved_at = datetime.now(timezone.utc)
+    ticket.updated_at = datetime.now(timezone.utc)
 
     try:
         from app.services.audit_service import AuditService
@@ -103,6 +155,7 @@ def approve_ticket():
 def assign_ticket():
     """
     Team Lead assigns a ticket to a specific agent within their department.
+    All child tickets of the assigned parent are automatically assigned too.
     """
     data = request.get_json()
     ticket_id = data.get('ticket_id')
@@ -128,10 +181,21 @@ def assign_ticket():
     if agent_dept != ticket.department_id:
         return jsonify({"success": False, "message": "Agent belongs to a different department — cross-department assignment rejected"}), 403
 
-    # 4. Perform Assignment
+    # 4. Perform Assignment on parent ticket
     ticket.assigned_to = agent_id
     ticket.status = 'IN_PROGRESS'
-    ticket.updated_at = datetime.utcnow()
+    ticket.assigned_at = datetime.now(timezone.utc)
+    ticket.accepted_at = datetime.now(timezone.utc) # Automatically "accept" on behalf of agent for immediate visibility
+    ticket.updated_at = datetime.now(timezone.utc)
+
+    # ── Propagate assignment to all child tickets ────────────────────────────
+    Ticket.query.filter_by(parent_ticket_id=ticket_id).update({
+        "assigned_to": agent_id,
+        "status": "IN_PROGRESS",
+        "assigned_at": datetime.now(timezone.utc),
+        "accepted_at": datetime.now(timezone.utc), # Sync accepted_at
+        "updated_at": datetime.now(timezone.utc)
+    }, synchronize_session=False)
 
     try:
         from app.services.audit_service import AuditService
@@ -191,19 +255,18 @@ def get_team_members():
 
     result = []
     
-    # Get current date for daily counts if needed, 
-    # but for now follow the prompt's provided logic.
-    # Note: In a real system, you'd filter by today's date for 'resolved_today'
-    
     for agent in agents:
+        # Only count parent tickets for workload (children are tracked through parent)
         active_count = Ticket.query.filter(
             Ticket.assigned_to == agent.id,
-            Ticket.status.in_(["OPEN", "IN_PROGRESS"])
+            Ticket.status.in_(["OPEN", "IN_PROGRESS"]),
+            Ticket.parent_ticket_id == None,    # Count parent workload only
         ).count()
 
         resolved_today = Ticket.query.filter(
             Ticket.assigned_to == agent.id,
-            Ticket.status.in_(["RESOLVED", "CLOSED"])
+            Ticket.status.in_(["RESOLVED", "CLOSED"]),
+            Ticket.parent_ticket_id == None,    # Count parent resolutions only
         ).count()
 
         profile = agent.agent_profile
@@ -223,4 +286,3 @@ def get_team_members():
         "success": True,
         "data": result
     }), 200
-

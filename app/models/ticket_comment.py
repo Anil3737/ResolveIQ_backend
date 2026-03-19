@@ -1,15 +1,12 @@
-# app/models/ticket_comment.py
+from app.extensions import db
+from datetime import datetime
 
-from sqlalchemy import Column, Integer, Text, DateTime, ForeignKey, Boolean, func
-from app.database import Base
-
-
-class TicketComment(Base):
+class TicketComment(db.Model):
     __tablename__ = "ticket_comments"
 
-    id = Column(Integer, primary_key=True, index=True)
-    ticket_id = Column(Integer, ForeignKey("tickets.id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    message = Column(Text, nullable=False)
-    is_internal = Column(Boolean, default=False)  # Internal notes visible only to team
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    id = db.Column(db.Integer, primary_key=True, index=True)
+    ticket_id = db.Column(db.Integer, db.ForeignKey("tickets.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    is_internal = db.Column(db.Boolean, default=False)  # Internal notes visible only to team
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

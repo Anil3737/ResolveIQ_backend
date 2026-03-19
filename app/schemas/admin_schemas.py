@@ -12,6 +12,7 @@ class AdminCreateUserRequest(BaseModel):
     Only admins can create users - supports all roles."""
     full_name: str = Field(min_length=3, max_length=100)
     email: EmailStr
+    emp_id: str | None = Field(default=None, max_length=20)
     phone: str | None = Field(default=None, max_length=20)
     password: str = Field(min_length=6, max_length=50)
     role: Literal["ADMIN", "TEAM_LEAD", "AGENT", "EMPLOYEE"] = Field(

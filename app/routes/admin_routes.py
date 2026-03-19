@@ -11,10 +11,16 @@ from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.extensions import db
 from app.utils.logging_utils import log_activity
+from app.models import PasswordResetRequest
+from app.utils.password_utils import hash_password
+import logging
 import re
 import random
 import string
-from datetime import datetime
+import secrets
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -34,21 +40,43 @@ def check_id_exists():
     if not emp_id:
         return jsonify({"success": False, "message": "emp_id is required"}), 400
     
-    # Check phone column where emp_id is stored
-    user = User.query.filter_by(phone=emp_id).first()
+    # Check emp_id column
+    user = User.query.filter_by(emp_id=emp_id).first()
     return jsonify({"success": True, "exists": user is not None}), 200
 
 @admin_bp.route('/users', methods=['GET'])
 @roles_required('ADMIN')
 def get_users():
     role_filter = request.args.get('role')
+    dept_id = request.args.get('department_id', type=int)
+    exclude_assigned = request.args.get('exclude_assigned', 'false').lower() == 'true'
+    
     query = User.query
     
     if role_filter:
         query = query.join(User.role).filter(Role.name == role_filter.upper())
     
+    if dept_id:
+        # Join with AgentProfile or TeamLeadProfile depending on role if possible,
+        # but User.to_dict() already handles role-specific data.
+        # We'll filter based on the profile's department_id.
+        from app.models.user import TeamLeadProfile, AgentProfile
+        if role_filter == 'TEAM_LEAD':
+            query = query.join(TeamLeadProfile).filter(TeamLeadProfile.department_id == dept_id)
+        elif role_filter == 'AGENT':
+            query = query.join(AgentProfile).filter(AgentProfile.department_id == dept_id)
+            
+    if exclude_assigned:
+        if role_filter == 'TEAM_LEAD':
+            # Exclude leads who are already leading a team
+            from app.models.team import Team
+            query = query.filter(~User.id.in_(db.session.query(Team.team_lead_id).filter(Team.team_lead_id != None)))
+        elif role_filter == 'AGENT':
+            # Exclude agents who are already members of any team
+            from app.models.team_member import TeamMember
+            query = query.filter(~User.id.in_(db.session.query(TeamMember.user_id)))
+    
     users = query.all()
-    # Explicitly include department and role info
     return jsonify({
         "success": True, 
         "data": [u.to_dict() for u in users]
@@ -63,14 +91,14 @@ def update_user(user_id):
         
         full_name = data.get('full_name', '').strip()
         email = data.get('email', '').strip()
-        emp_id = data.get('emp_id', '').strip() #phone
+        emp_id = data.get('emp_id', '').strip() # emp_id column
         role_name = data.get('role', '').upper()
         department_id = data.get('department_id')
 
         if full_name: user.full_name = full_name
         if email: user.email = email
-        if emp_id: user.phone = emp_id
-        if department_id: user.department_id = department_id
+        if emp_id: user.emp_id = emp_id
+        # Note: department_id is stored on TeamLeadProfile/AgentProfile, not User directly.
 
         if role_name:
             new_role = Role.query.filter_by(name=role_name).first()
@@ -163,7 +191,7 @@ def get_teams():
                 })
         return jsonify({"success": True, "data": teams}), 200
     except Exception as e:
-        print(f"Error fetching teams: {e}")
+        logger.error(f"Error fetching teams: {e}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/teams', methods=['POST'])
@@ -203,7 +231,7 @@ def create_team():
 
         # Add assigned agents
         if agent_ids:
-            print(f"Processing {len(agent_ids)} agents for team {new_team.id}")
+            logger.info(f"Processing {len(agent_ids)} agents for team {new_team.id}")
             from app.models.user import AgentProfile
             for agent_id in agent_ids:
                 # 1. Store association in TeamMember table
@@ -214,11 +242,11 @@ def create_team():
                 agent_profile = AgentProfile.query.filter_by(user_id=agent_id).first()
                 if agent_profile:
                     agent_profile.team_lead_id = team_lead_id
-                    print(f"Updated AgentProfile for User {agent_id} (Team Lead: {team_lead_id})")
+                    logger.debug(f"Updated AgentProfile for User {agent_id} (Team Lead: {team_lead_id})")
                 else:
-                    print(f"No AgentProfile found for User {agent_id}")
+                    logger.warning(f"No AgentProfile found for User {agent_id}")
         else:
-            print("No agent_ids provided in request")
+            logger.info("No agent_ids provided in request")
 
         log_activity(
             user_id=current_user.id,
@@ -244,7 +272,7 @@ def create_team():
 
     except Exception as e:
         db.session.rollback()
-        print(f"ERROR in create_team: {str(e)}")
+        logger.error(f"ERROR in create_team: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/teams/<int:team_id>', methods=['GET'])
@@ -253,8 +281,9 @@ def get_team_detail(team_id):
     try:
         team = Team.query.get_or_404(team_id)
         from app.models.department import Department
-        dept = Department.query.get(team.department_id) if team.department_id else None
-        lead = User.query.get(team.team_lead_id) if team.team_lead_id else None
+        dept = db.session.get(Department, team.department_id) if team.department_id else None
+        # Get lead for specific metrics
+        lead = db.session.get(User, team.team_lead_id) if team.team_lead_id else None
         
         return jsonify({
             "success": True,
@@ -272,7 +301,7 @@ def get_team_detail(team_id):
             }
         }), 200
     except Exception as e:
-        print(f"Error fetching team detail: {e}")
+        logger.error(f"Error fetching team detail: {e}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/teams/<int:team_id>/members', methods=['GET'])
@@ -283,14 +312,14 @@ def get_admin_team_members(team_id):
         members = User.query.join(TeamMember, User.id == TeamMember.user_id)\
                             .filter(TeamMember.team_id == team_id).all()
         
-        print(f"Team {team_id}: Found {len(members)} members")
+        logger.info(f"Team {team_id}: Found {len(members)} members")
         
         return jsonify({
             "success": True,
             "data": [m.to_dict() for m in members]
         }), 200
     except Exception as e:
-        print(f"ERROR fetching team members: {str(e)}")
+        logger.error(f"ERROR fetching team members: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/teams/<int:team_id>', methods=['PUT'])
@@ -334,7 +363,7 @@ def update_team(team_id):
             agent_profile = AgentProfile.query.filter_by(user_id=removed_id).first()
             if agent_profile and agent_profile.team_lead_id == team.team_lead_id:
                 agent_profile.team_lead_id = None
-                print(f"Cleared Team Lead for removed agent {removed_id}")
+                logger.info(f"Cleared Team Lead for removed agent {removed_id}")
 
         # 4. Update team details
         team.name = name
@@ -369,7 +398,7 @@ def update_team(team_id):
 
     except Exception as e:
         db.session.rollback()
-        print(f"ERROR updating team: {e}")
+        logger.error(f"ERROR updating team: {e}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/teams/<int:team_id>', methods=['DELETE'])
@@ -406,7 +435,7 @@ def delete_team(team_id):
 
     except Exception as e:
         db.session.rollback()
-        print(f"ERROR deleting team: {e}")
+        logger.error(f"ERROR deleting team: {e}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/audit-logs', methods=['GET'])
@@ -552,31 +581,56 @@ def create_staff():
         else:
              return jsonify({"success": False, "message": "Role must be 'TEAM_LEAD' or 'AGENT'"}), 400
 
-        # 3. Unique EMP ID (stored in users.phone column)
-        if User.query.filter_by(phone=emp_id).first():
+        # 3. Unique EMP ID (stored in users.emp_id column)
+        if User.query.filter_by(emp_id=emp_id).first():
             return jsonify({"success": False, "message": "EMP ID already exists"}), 400
 
-        # 4. Department: Must match specified list
-        valid_depts = [
-            "Network Issue",
-            "Hardware Failure",
-            "Software Installation",
-            "Application Downtime / Application Issues",
-            "Other"
-        ]
-        if dept_name not in valid_depts:
-            return jsonify({"success": False, "message": f"Department must be one of: {', '.join(valid_depts)}"}), 400
+        # 4. Department: Flexible case-insensitive matching
+        DEPT_NAME_MAP = {
+            "network issue": "Network Issues",
+            "network issues": "Network Issues",
+            "hardware failure": "Hardware Failure",
+            "software installation": "Software Installation",
+            "application down/ application issue": "Application Down/ Application Issue",
+            "application downtime / application issues": "Application Down/ Application Issue",
+            "application issues": "Application Down/ Application Issue",
+            "application issue": "Application Down/ Application Issue",
+            "application down": "Application Down/ Application Issue",
+            "others": "Others",
+            "other": "Others"
+        }
         
-        dept = Department.query.filter_by(name=dept_name).first()
+        normalized_dept = DEPT_NAME_MAP.get(dept_name.lower())
+        if not normalized_dept:
+             logger.warning(f"Department mapping failed for '{dept_name}'")
+             return jsonify({
+                 "success": False, 
+                 "message": f"Invalid department '{dept_name}'. Use canonical names."
+             }), 400
+             
+        dept = Department.query.filter_by(name=normalized_dept).first()
         if not dept:
-            # If not found, attempt to find by partial match or error out
-            # Requirements say "Map dynamically", assuming they exist in DB
-            return jsonify({"success": False, "message": f"Department '{dept_name}' not initialized in database"}), 400
+            logger.warning(f"Department '{normalized_dept}' not in DB")
+            return jsonify({"success": False, "message": f"Department '{normalized_dept}' not initialized"}), 400
 
-        # 5. Role Lookup
+        # 5. Role Lookup - Standardize names
+        ROLE_MAP = {
+            "TEAM_LEAD": "TEAM_LEAD",
+            "TEAMLEAD": "TEAM_LEAD",
+            "TEAM LEAD": "TEAM_LEAD",
+            "AGENT": "AGENT",
+            "SUPPORT_AGENT": "AGENT",
+            "SUPPORT AGENT": "AGENT"
+        }
+        role_key = role_input.upper().replace(" ", "_").strip()
+        role_name = ROLE_MAP.get(role_key, role_key)
+        
         role_obj = Role.query.filter_by(name=role_name).first()
         if not role_obj:
-            return jsonify({"success": False, "message": f"Role '{role_name}' not found in database"}), 400
+            logger.warning(f"Role mapping failed for '{role_input}' -> '{role_name}'")
+            return jsonify({"success": False, "message": f"Role '{role_name}' not found"}), 400
+
+        logger.info(f"Creating staff {full_name} for dept {dept.name} with role {role_name}")
 
         # --- EMAIL GENERATION ---
         # Logic: first word of full name, lowercase, no spaces
@@ -596,7 +650,7 @@ def create_staff():
         staff_data = {
             "full_name": full_name,
             "email": generated_email,
-            "phone": emp_id, # phone = emp_id
+            "emp_id": emp_id, # emp_id column
             "password": "Resolveiq@123",
             "role": role_name,
             "department_id": dept.id,
@@ -614,7 +668,7 @@ def create_staff():
                 "data": {
                     "full_name": user.full_name,
                     "email": user.email,
-                    "emp_id": user.phone,
+                    "emp_id": user.emp_id,
                     "role": role_name,
                     "department": dept_name
                 }
@@ -623,7 +677,7 @@ def create_staff():
             return jsonify({"success": False, "message": message}), 400
 
     except Exception as e:
-        print(f"ERROR in create_staff: {str(e)}")
+        logger.error(f"ERROR in create_staff: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
 
 @admin_bp.route('/create-agent', methods=['POST'])
@@ -652,17 +706,34 @@ def create_agent():
             return jsonify({"success": False, "message": "EMP ID must be in format EMPXXXX (e.g., EMP1001)"}), 400
         
         emp_num = int(emp_id[3:])
-        if not (1000 <= emp_num <= 2000):
-            return jsonify({"success": False, "message": "EMP ID number must be between 1000 and 2000 inclusive"}), 400
+        # For AGENT, EMP ID number must be between 1000 and 1999 (matches staff logic)
+        if not (1000 <= emp_num <= 1999):
+            return jsonify({"success": False, "message": "EMP ID number must be between 1000 and 1999"}), 400
 
         # 3. Department
-        dept = Department.query.filter_by(name=dept_name).first()
+        # Use same DEPT_NAME_MAP for consistency
+        DEPT_NAME_MAP = {
+            "network issue": "Network Issues",
+            "network issues": "Network Issues",
+            "hardware failure": "Hardware Failure",
+            "software installation": "Software Installation",
+            "application down/ application issue": "Application Down/ Application Issue",
+            "application downtime / application issues": "Application Down/ Application Issue",
+            "application issues": "Application Down/ Application Issue",
+            "application issue": "Application Down/ Application Issue",
+            "application down": "Application Down/ Application Issue",
+            "others": "Others",
+            "other": "Others"
+        }
+        normalized_dept = DEPT_NAME_MAP.get(dept_name.lower())
+        dept = Department.query.filter_by(name=normalized_dept).first() if normalized_dept else None
+        
         if not dept:
-            return jsonify({"success": False, "message": f"Department '{dept_name}' not found"}), 400
+            return jsonify({"success": False, "message": f"Department '{dept_name}' not found or invalid"}), 400
 
         # 4. Team Lead Validation (Optional now)
         if team_lead_id:
-            team_lead = User.query.get(team_lead_id)
+            team_lead = db.session.get(User, team_lead_id)
             if not team_lead:
                 return jsonify({"success": False, "message": "Team Lead not found"}), 400
             
@@ -694,7 +765,7 @@ def create_agent():
         agent_data = {
             "full_name": full_name,
             "email": generated_email,
-            "phone": emp_id,
+            "emp_id": emp_id,
             "password": "Resolveiq@123",
             "role": "AGENT",
             "department_id": dept.id,
@@ -713,7 +784,7 @@ def create_agent():
                 "data": {
                     "full_name": user.full_name,
                     "email": user.email,
-                    "emp_id": user.phone,
+                    "emp_id": user.emp_id,
                     "role": "AGENT",
                     "department": dept_name,
                     "team_lead": team_lead.full_name if team_lead else "Unassigned"
@@ -724,7 +795,7 @@ def create_agent():
 
     except Exception as e:
         db.session.rollback()
-        print(f"ERROR in create_agent: {str(e)}")
+        logger.error(f"ERROR in create_agent: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": f"Server error: {str(e)}"}), 500
 
 # Redundant /tickets route removed - use ticket_routes.py instead
@@ -779,7 +850,7 @@ def get_system_activity():
             "logs": [log.to_dict() for log in logs]
         }), 200
     except Exception as e:
-        print(f"ERROR fetching activity logs: {str(e)}")
+        logger.error(f"ERROR fetching activity logs: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
 
 @admin_bp.route('/dashboard', methods=['GET'])
@@ -800,7 +871,7 @@ def get_dashboard_metrics():
         
         # 3. SLA Breached Count (deadline passed AND not RESOLVED/CLOSED)
         sla_breached_count = Ticket.query.filter(
-            Ticket.sla_deadline < datetime.utcnow(),
+            Ticket.sla_deadline < datetime.now(timezone.utc),
             Ticket.status.notin_(["RESOLVED", "CLOSED"])
         ).count()
         
@@ -808,8 +879,11 @@ def get_dashboard_metrics():
         escalated_count = Ticket.query.filter(
             db.or_(
                 Ticket.escalation_required == True,
-                Ticket.status == 'ESCALATED'
-            )
+                Ticket.status == 'ESCALATED',
+                Ticket.status == 'HIGH_RISK',
+                Ticket.ai_score >= 80
+            ),
+            Ticket.status.notin_(["RESOLVED", "CLOSED"])
         ).count()
         
         # 5. Risk Distribution (Categorize by ai_score)
@@ -831,7 +905,8 @@ def get_dashboard_metrics():
                 "total_tickets": total_tickets,
                 "high_risk": high_risk_count,
                 "sla_breached": sla_breached_count,
-                "escalated": escalated_count
+                "escalated": escalated_count,
+                "pending_reset_count": PasswordResetRequest.query.filter_by(status='PENDING').count()
             },
             "risk_distribution": {
                 "critical": critical,
@@ -851,5 +926,109 @@ def get_dashboard_metrics():
         }), 200
         
     except Exception as e:
-        print(f"ERROR fetching dashboard metrics: {str(e)}")
+        logger.error(f"ERROR fetching dashboard metrics: {str(e)}", exc_info=True)
         return jsonify({"success": False, "message": str(e)}), 500
+@admin_bp.route('/reset-password/requests', methods=['GET'])
+@roles_required('ADMIN')
+def get_reset_requests():
+    status = request.args.get('status', 'PENDING')
+    requests = PasswordResetRequest.query.filter_by(status=status).order_by(PasswordResetRequest.requested_at.desc()).all()
+    return jsonify({
+        "success": True, 
+        "data": [r.to_dict() for r in requests]
+    }), 200
+
+@admin_bp.route('/reset-password/approve', methods=['POST'])
+@roles_required('ADMIN')
+def approve_reset():
+    try:
+        data = request.get_json()
+        request_id = data.get('request_id')
+        if not request_id:
+            return jsonify({"success": False, "message": "request_id is required"}), 400
+            
+        reset_req = db.session.get(PasswordResetRequest, request_id)
+        if not reset_req:
+            return jsonify({"success": False, "message": "Request not found"}), 404
+            
+        if reset_req.status != 'PENDING':
+            return jsonify({"success": False, "message": "Request has already been processed"}), 400
+            
+        user = db.session.get(User, reset_req.user_id)
+        if not user:
+            return jsonify({"success": False, "message": "User associated with request not found"}), 404
+            
+        # Step 1 — Generate secure random 12-character password
+        chars = string.ascii_letters + string.digits
+        temp_pwd = ''.join(secrets.choice(chars) for _ in range(12))
+        
+        # Step 2 — Hash for user login
+        user.password_hash = hash_password(temp_pwd)
+        user.require_password_change = True
+        
+        # Step 3 — Update request record
+        reset_req.temp_password = temp_pwd # Stored for user retrieval via Forgot Password page
+        reset_req.temp_password_hash = user.password_hash
+        reset_req.status = 'APPROVED'
+        reset_req.processed_at = datetime.now(timezone.utc)
+        reset_req.processed_by = current_user.id
+        
+        db.session.commit()
+        
+        log_activity(
+            user_id=current_user.id,
+            action_type="UPDATE",
+            entity_type="USER",
+            entity_id=user.id,
+            description=f"Admin approved password reset for user: {user.email}"
+        )
+        
+        return jsonify({
+            "success": True,
+            "message": "Password reset approved. User can now retrieve the temporary password from the Forgot Password page."
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"❌ APPROVE RESET ERROR: {str(e)}", exc_info=True)
+        db.session.rollback()
+        return jsonify({"success": False, "message": "Server error"}), 500
+
+@admin_bp.route('/reset-password/reject', methods=['POST'])
+@roles_required('ADMIN')
+def reject_reset():
+    try:
+        data = request.get_json()
+        request_id = data.get('request_id')
+        if not request_id:
+            return jsonify({"success": False, "message": "request_id is required"}), 400
+            
+        reset_req = db.session.get(PasswordResetRequest, request_id)
+        if not reset_req:
+            return jsonify({"success": False, "message": "Request not found"}), 404
+            
+        if reset_req.status != 'PENDING':
+            return jsonify({"success": False, "message": "Request has already been processed"}), 400
+            
+        reset_req.status = 'DECLINED'
+        reset_req.processed_at = datetime.now(timezone.utc)
+        reset_req.processed_by = current_user.id
+        
+        db.session.commit()
+        
+        log_activity(
+            user_id=current_user.id,
+            action_type="UPDATE",
+            entity_type="PASSWORD_RESET_REQUEST",
+            entity_id=request_id,
+            description=f"Admin declined password reset for request ID: {request_id}"
+        )
+        
+        return jsonify({
+            "success": True,
+            "message": "Password reset request declined."
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"❌ DECLINE RESET ERROR: {str(e)}", exc_info=True)
+        db.session.rollback()
+        return jsonify({"success": False, "message": "Server error"}), 500

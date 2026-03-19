@@ -44,8 +44,8 @@ class AIScoringService:
             breach_risk = max(breach_risk, 0.8)
             
         # 4. Escalation Required (0 or 1)
-        # P1 and P2 require escalation
-        escalation_required = 1 if priority in ['P1', 'P2'] else 0
+        # Modified to score >= 80 to match Android app's accuracy calculation
+        escalation_required = 1 if score >= 80 else 0
         
         # 5. SLA Calculation (Dynamic Lookup)
         from app.models.sla_rule import SLARule
@@ -60,7 +60,8 @@ class AIScoringService:
             if rule:
                 sla_hours = rule.sla_hours
         
-        sla_deadline = datetime.utcnow() + timedelta(hours=sla_hours)
+        from datetime import timezone
+        sla_deadline = datetime.now(timezone.utc) + timedelta(hours=sla_hours)
         
         return {
             "ai_score": score,

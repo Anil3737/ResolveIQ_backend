@@ -18,6 +18,20 @@ def create_ticket():
     data = request.get_json()
     user_id = current_user.id
     ticket = TicketService.create_ticket(data, user_id)
+
+    # ── Duplicate / Child ticket: return enriched response ──────────────────
+    parent_ticket = getattr(ticket, '_parent_ticket', None)
+    if parent_ticket:
+        return jsonify({
+            "success": True,
+            "is_duplicate": True,
+            "message": "A similar issue has already been reported. Your ticket has been linked to the existing incident.",
+            "parent_ticket_number": parent_ticket.ticket_number,
+            "ticket_number": ticket.ticket_number,
+            "data": ticket.to_dict(role="EMPLOYEE")
+        }), 201
+
+    # ── Normal (parent) ticket creation ─────────────────────────────────────
     return jsonify({"success": True, "data": ticket.to_dict(role="EMPLOYEE")}), 201
 
 @ticket_bp.route('', methods=['GET'])
@@ -77,8 +91,11 @@ def get_tickets():
             query = query.filter(
                 db.or_(
                     Ticket.escalation_required == True,
-                    Ticket.status == 'ESCALATED'
-                )
+                    Ticket.status == 'ESCALATED',
+                    Ticket.status == 'HIGH_RISK',
+                    Ticket.ai_score >= 80
+                ),
+                Ticket.status.notin_(["RESOLVED", "CLOSED"])
             )
             
         query = query.order_by(Ticket.created_at.desc())

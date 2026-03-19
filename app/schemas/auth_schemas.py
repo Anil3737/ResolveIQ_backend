@@ -10,6 +10,7 @@ from pydantic import BaseModel, EmailStr, Field
 class RegisterRequest(BaseModel):
     full_name: str = Field(min_length=3, max_length=100)
     email: EmailStr
+    emp_id: str | None = Field(default=None, max_length=20)
     phone: str | None = Field(default=None, max_length=20)
     password: str = Field(min_length=6, max_length=50)
 
@@ -36,6 +37,7 @@ class UserResponse(BaseModel):
     id: int  # Changed from user_id to match database column
     full_name: str
     email: str
+    emp_id: str | None
     phone: str | None
     role: str
     is_active: bool

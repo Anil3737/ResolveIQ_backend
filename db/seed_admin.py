@@ -11,7 +11,7 @@ from app.models.user import User
 app = create_app()
 
 with app.app_context():
-    user = User.query.get(1)
+    user = db.session.get(User, 1)
     if user:
         user.set_password("admin123")
         db.session.commit()

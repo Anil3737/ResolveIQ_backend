@@ -1,7 +1,10 @@
+import logging
 import numpy as np
 import re
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+
+logger = logging.getLogger(__name__)
 
 # Global variable to hold the model instance
 _embedder_instance = None
@@ -10,7 +13,7 @@ def get_embedder():
     """Lazy loader for the SentenceTransformer model."""
     global _embedder_instance
     if _embedder_instance is None:
-        print("📥 Loading BERT model: all-MiniLM-L6-v2...")
+        logger.info("📥 Loading BERT model: all-MiniLM-L6-v2...")
         _embedder_instance = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedder_instance
 
@@ -113,6 +116,7 @@ CATEGORY_KEYWORDS = {
 "network performance issue",
 "network latency high","network packet loss","network jitter","network congestion","network throughput issue"
 ],
+
     "Hardware Failure": [
 "laptop not starting", "desktop not booting",
 "system not powering on", "no power",
